@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-补丁管理工具：检查提交合入状态 + 批量 Cherry-Pick
+补丁管理工具。
 
-子命令:
-  check       根据 commit title 检查是否已合入当前分支，输出带状态与时间排序的报告
-  cherry-pick  从补丁列表文件批量 cherry-pick（支持 --signoff、冲突暂停续跑）
+提供三个子命令：
+  check
+      按 commit title 检查是否已合入目标分支，并输出带状态和时间的报告。
+  cherry-pick
+      从补丁列表批量执行 cherry-pick，支持 --signoff、冲突暂停与续跑。
+  sync-meta
+      参考另一分支的同名提交，批量同步作者与作者时间。
 """
 
 import argparse
@@ -19,12 +23,19 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 def _decode_output(data: Optional[bytes]) -> str:
-    """解码 git 输出，使用 errors='replace' 避免非 UTF-8 字符导致解码报错。"""
+    """解码 git 命令输出。
+
+    使用 errors='replace'，避免因非 UTF-8 字节导致解码异常。
+    """
     return (data or b"").decode("utf-8", errors="replace").strip()
 
 
 def run_git(args: List[str], capture: bool = True, check: bool = False, cwd: Optional[str] = None) -> Tuple[int, str, str]:
-    """执行 git 命令。capture=True 时返回 (returncode, stdout, stderr)。"""
+    """执行 git 命令并统一返回结果。
+
+    返回值恒为 (returncode, stdout, stderr)。
+    当 capture=False 时，stdout/stderr 为空字符串。
+    """
     cmd = ["git"] + args
     try:
         r = subprocess.run(
@@ -47,9 +58,11 @@ def run_git(args: List[str], capture: bool = True, check: bool = False, cwd: Opt
 
 
 def get_branch_log_oneline(cwd: Optional[str] = None, long_hash: bool = False, branch: Optional[str] = None) -> Optional[List[str]]:
-    """获取指定分支 --no-merges 的 log 行列表。
-    branch=None 时使用当前分支；否则使用指定分支名/引用。
-    long_hash=False 时使用 --oneline（短 hash）；long_hash=True 时使用 %H %s（40 位长 hash）。
+    """获取指定分支的非 merge 提交列表（每项一行）。
+
+    - branch=None: 使用当前分支
+    - long_hash=False: 使用 --oneline（短 hash）
+    - long_hash=True: 使用 --format=%H %s（40 位 hash + title）
     """
     log_args = ["log", "--no-merges"]
     if branch:
@@ -65,7 +78,7 @@ def get_branch_log_oneline(cwd: Optional[str] = None, long_hash: bool = False, b
 
 
 def parse_oneline_line(line: str) -> Tuple[Optional[str], str]:
-    """解析 'hash title...' 返回 (hash, title)。"""
+    """解析 'hash title...' 形式的文本，返回 (hash, title)。"""
     parts = line.split(None, 1)
     if not parts:
         return None, ""
@@ -73,14 +86,21 @@ def parse_oneline_line(line: str) -> Tuple[Optional[str], str]:
 
 
 def is_valid_commit_hash(s: str) -> bool:
-    """判断是否为 10–40 位十六进制 commit hash。"""
+    """判断字符串是否为 10-40 位十六进制 commit hash。"""
     return bool(s and re.match(r"^[0-9a-f]{10,40}$", s.lower()))
 
 
 def get_batch_commit_info(commit_ids: List[str], cwd: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
-    """批量获取多个 commit 的 describe、timestamp 和 commit_time。
+    """批量查询多个提交的元信息。
 
-    返回格式: {commit_id: {"describe": str, "timestamp": int, "commit_time": str}}
+    返回格式：
+      {
+        commit_id: {
+          "describe": str,
+          "timestamp": int,
+          "commit_time": str
+        }
+      }
     """
     if not commit_ids:
         return {}
@@ -88,7 +108,7 @@ def get_batch_commit_info(commit_ids: List[str], cwd: Optional[str] = None) -> D
     result: Dict[str, Dict[str, Any]] = {cid: {"describe": "", "timestamp": 0, "commit_time": ""} for cid in commit_ids}
 
     def key_for_full_hash(full_hash: str) -> Optional[str]:
-        """将 log 输出的 40 位 hash 映射回 result 的 key（可能是短 hash）。"""
+        """将 40 位 full hash 映射回 result 的 key（key 可能是短 hash）。"""
         if full_hash in result:
             return full_hash
         for cid in commit_ids:
@@ -118,6 +138,7 @@ def get_batch_commit_info(commit_ids: List[str], cwd: Optional[str] = None) -> D
                     result[current_key]["timestamp"] = 0
                     result[current_key]["commit_time"] = ""
                 else:
+                    # 当前 full hash 不在请求列表中：跳过后续两行（ct/ci）。
                     skip_next = 2
             else:
                 line_index += 1
@@ -149,7 +170,7 @@ def get_batch_commit_info(commit_ids: List[str], cwd: Optional[str] = None) -> D
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    """检查输入文件中的每个 commit title 是否已合入指定分支。"""
+    """检查输入文件中的 commit title 是否已合入目标分支。"""
     inp = Path(args.input_file)
     out = Path(args.output_file)
     branch = args.branch
@@ -158,6 +179,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         logging.error(f"输入文件不存在 '{inp}'")
         return 1
 
+    # 输入文件每行一个 title，空行自动跳过。
     titles = []
     with open(inp, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -172,6 +194,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         logging.error("无法获取 git log，请确保在 git 仓库中且分支/引用有效")
         return 1
 
+    # 构建 title -> (hash, raw_line) 索引；重复 title 仅保留首次出现。
     title_to_line: Dict[str, Tuple[str, str]] = {}
     for ln in lines:
         h, title = parse_oneline_line(ln)
@@ -190,6 +213,7 @@ def cmd_check(args: argparse.Namespace) -> int:
             commit_id, _ = title_to_line[title]
             matched_commit_ids.append(commit_id)
 
+    # 先批量获取命中提交的元信息，减少逐条 git 调用。
     commit_info_map = get_batch_commit_info(matched_commit_ids, cwd=repo)
 
     for title in titles:
@@ -211,6 +235,7 @@ def cmd_check(args: argparse.Namespace) -> int:
                 logging.info(f"  ✓ 找到: {commit_id}, 状态: {status}, 时间: {commit_time} (无法获取 describe)")
         else:
             status = "N"
+            # 用较大时间戳占位，使未命中项在排序后位于末尾。
             results.append((9999999999, title, "", status, "", ""))
             logging.info(f"  ✗ 未在{branch_desc}中找到")
 
@@ -228,7 +253,7 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 
 def cmd_cherry_pick(args: argparse.Namespace) -> int:
-    """从补丁列表文件批量 cherry-pick。"""
+    """从补丁列表文件批量执行 cherry-pick。"""
     patch_file = Path(args.patch_file)
     if not patch_file.is_file():
         logging.error(f"补丁文件不存在 '{patch_file}'")
@@ -243,6 +268,7 @@ def cmd_cherry_pick(args: argparse.Namespace) -> int:
             h, rest = parse_oneline_line(line)
             entries.append((h, rest))
 
+    # total 仅统计合法 hash，用于统一进度口径。
     valid = [(h, rest) for h, rest in entries if is_valid_commit_hash(h)]
     total = len(valid)
     try:
@@ -272,6 +298,7 @@ def cmd_cherry_pick(args: argparse.Namespace) -> int:
         logging.info(f"起始序号: {start}")
     logging.info("==========================================")
 
+    # processed 仅统计“合法 hash”项，与 total 保持一致。
     processed = 0
     skipped_invalid = 0
     line_number = 0
@@ -308,6 +335,7 @@ def cmd_cherry_pick(args: argparse.Namespace) -> int:
         else:
             logging.info(f"✗ 冲突: {h}")
             logging.info("")
+            # 冲突处理策略：人工解决后回车，脚本继续执行 --continue。
             logging.info("请解决冲突后按 Enter 继续（将执行 git cherry-pick --continue）")
             logging.info(f"当前进度: {processed}/{total}")
             try:
@@ -345,7 +373,9 @@ def cmd_cherry_pick(args: argparse.Namespace) -> int:
 
 def cmd_sync_meta(args):
     """
-    根据指定分支上同名提交的作者/作者时间，刷新当前分支一段提交的作者/作者时间。
+    用参考分支上“同名提交”的作者信息，刷新当前分支指定范围内的提交元数据。
+
+    仅更新作者相关字段（name/email/date），不修改提交者信息。
 
     典型用法（在当前分支上）:
       patch_tool.py sync-meta OLK-6.6 base_commit..HEAD
@@ -357,7 +387,7 @@ def cmd_sync_meta(args):
     print(f"参考分支: {src_branch}")
     print(f"当前分支提交范围: {commit_range}")
 
-    # 1. 收集参考分支上的 title -> [meta...] 映射
+    # 1) 从参考分支构建 title -> [meta...] 映射（保留列表用于检测同名歧义）。
     code, out, err = run_git(
         [
             "log",
@@ -406,7 +436,7 @@ def cmd_sync_meta(args):
     if not title_to_src:
         print(f"警告: 在参考分支 {src_branch} 上未找到任何非 merge 提交")
 
-    # 2. 遍历当前分支给定范围内的提交
+    # 2) 枚举当前分支给定范围内的非 merge 提交。
     code, out, err = run_git(
         [
             "log",
@@ -432,7 +462,7 @@ def cmd_sync_meta(args):
         print(f"范围 {commit_range} 内没有非 merge 提交，退出。")
         return 0
 
-    # 3. 为每个提交找参考分支上的同名提交，并生成需要更新的映射
+    # 3) 逐条匹配同名提交，生成“当前提交 -> 目标作者元信息”的映射。
     commit_to_meta = {}
     print("")
     print("将要检查的提交（当前分支）:")
@@ -443,7 +473,7 @@ def cmd_sync_meta(args):
             print(f"  ✗ 未在参考分支 {src_branch} 上找到同名提交，跳过。")
             continue
         if len(src_list) > 1:
-            # 为避免误匹配，这里要求唯一匹配；如果需要可以放宽逻辑。
+            # 为避免误改，默认要求参考分支中的同名提交唯一。
             print(
                 f"  ✗ 在参考分支 {src_branch} 上找到 {len(src_list)} 个同名提交，出于安全考虑跳过。"
             )
@@ -455,7 +485,7 @@ def cmd_sync_meta(args):
 
         src = src_list[0]
 
-        # 读取当前提交现有的作者/时间信息，便于展示变化
+        # 读取当前提交现有作者信息，仅用于展示“变更前 -> 变更后”。
         code2, cur_meta_out, _ = run_git(
             ["log", "-1", "--format=%an%x01%ae%x01%ad%x01%cn%x01%ce%x01%cd", h],
             cwd=repo,
@@ -491,7 +521,7 @@ def cmd_sync_meta(args):
     print("即将通过 'git filter-branch --env-filter' 改写历史。")
     print("注意: 这会重写当前分支历史，后续需要使用 push --force 推送到远端（如有）。")
 
-    # 4. 构造 env-filter 脚本
+    # 4) 构造 env-filter 脚本：按 commit hash 精确覆写作者字段。
     lines = ['case "$GIT_COMMIT" in']
     for commit, meta in commit_to_meta.items():
         lines.append(f"  {commit})")
@@ -508,7 +538,7 @@ def cmd_sync_meta(args):
     lines.append("esac")
     env_filter = "\n".join(lines)
 
-    # 5. 运行 filter-branch
+    # 5) 执行 filter-branch 改写指定范围历史。
     print("")
     print("开始执行 git filter-branch ...")
     code, _, _ = run_git(
@@ -545,7 +575,7 @@ def main() -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    # check
+    # check 子命令参数
     p_check = sub.add_parser("check", help="按 commit title 检查是否已合入当前分支")
     p_check.add_argument("input_file", metavar="INPUT", help="输入文件，每行一个 commit title")
     p_check.add_argument("output_file", metavar="OUTPUT", help="输出文件，格式: title|commit_id|status|git_describe|commit_time (Y/N)")
@@ -553,7 +583,7 @@ def main() -> int:
     p_check.add_argument("-l", "--long-hash", action="store_true", help="log 使用 40 位完整 commit hash 匹配（默认使用短 hash）")
     p_check.set_defaults(func=cmd_check)
 
-    # cherry-pick
+    # cherry-pick 子命令参数
     p_cp = sub.add_parser("cherry-pick", help="从补丁列表批量 cherry-pick")
     p_cp.add_argument("patch_file", metavar="PATCH_FILE", help="补丁文件，每行: commit_hash 或 commit_hash 空格 commit_title")
     p_cp.add_argument("start", nargs="?", default="1", metavar="START", help="从第几个有效提交开始（默认 1）")
@@ -561,7 +591,7 @@ def main() -> int:
     p_cp.add_argument("-n", "--no-signoff", action="store_true", help="不使用 git cherry-pick --signoff")
     p_cp.set_defaults(func=cmd_cherry_pick)
 
-    # sync-meta
+    # sync-meta 子命令参数
     p_sync = sub.add_parser(
         "sync-meta",
         help="根据指定分支的同名提交，刷新当前分支一段提交的作者/时间",

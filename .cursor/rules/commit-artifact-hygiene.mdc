@@ -1,0 +1,16 @@
+---
+description: 提交卫生规则：禁止提交无关附加产物
+alwaysApply: true
+---
+
+# 提交卫生（Commit Hygiene）
+
+- 在执行 `git add` / `git commit` 前，先检查 `git status --short`。
+- 仅暂存本次需求相关的代码与文档文件，不得“顺手”带入无关改动。
+- 禁止提交运行时或环境附加产物，包括但不限于：
+  - `__pycache__/`
+  - `*.pyc`、`*.pyo`
+  - `.pytest_cache/`、`.mypy_cache/`、`.ruff_cache/`
+  - 临时日志、IDE/编辑器缓存、构建中间文件
+- 如果发现上述产物进入暂存区，必须先移除（取消暂存或删除产物）再提交。
+- 提交前做最后一次检查：`git status --short` 应仅包含本次任务的有效变更。
