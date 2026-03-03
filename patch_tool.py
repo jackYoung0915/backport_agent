@@ -5,7 +5,7 @@
 
 提供三个子命令：
   check
-      按 commit title 检查是否已合入目标分支，并按 describe 合入序输出报告。
+      检查补丁是否已合入目标分支（支持输入 title 或 "hash title"），并按 describe 合入序输出报告。
   cherry-pick
       从补丁列表批量执行 cherry-pick，支持 --signoff、冲突暂停与续跑。
   sync-meta
@@ -86,8 +86,24 @@ def parse_oneline_line(line: str) -> Tuple[Optional[str], str]:
 
 
 def is_valid_commit_hash(s: str) -> bool:
-    """判断字符串是否为 10-40 位十六进制 commit hash。"""
-    return bool(s and re.match(r"^[0-9a-f]{10,40}$", s.lower()))
+    """判断字符串是否为 7-40 位十六进制 commit hash。"""
+    return bool(s and re.fullmatch(r"[0-9a-f]{7,40}", s.lower()))
+
+
+def parse_check_input_line(line: str) -> Tuple[Optional[str], str]:
+    """解析 check 输入行，支持:
+    - "title..."
+    - "hash title..."
+    - "hash"（仅 hash）
+    返回 (input_hash, title)。
+    """
+    s = line.strip()
+    if not s:
+        return None, ""
+    first, rest = parse_oneline_line(s)
+    if first and is_valid_commit_hash(first):
+        return first.lower(), rest
+    return None, s
 
 
 def _natural_sort_key(text: str) -> Tuple[Tuple[int, Any], ...]:
@@ -208,7 +224,7 @@ def get_batch_commit_info(commit_ids: List[str], cwd: Optional[str] = None) -> D
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    """检查输入文件中的 commit title 是否已合入目标分支并排序输出。"""
+    """检查输入文件中的提交是否已合入目标分支并排序输出。"""
     inp = Path(args.input_file)
     out = Path(args.output_file)
     branch = args.branch
@@ -217,64 +233,116 @@ def cmd_check(args: argparse.Namespace) -> int:
         logging.error(f"输入文件不存在 '{inp}'")
         return 1
 
-    # 输入文件每行一个 title，空行自动跳过。
-    titles = []
+    # 输入文件每行支持:
+    # 1) title
+    # 2) hash title
+    # 3) hash
+    # 空行自动跳过。
+    input_items: List[Tuple[str, Optional[str], str]] = []
     with open(inp, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
-            t = line.strip()
-            if t:
-                titles.append(t)
+            raw = line.strip()
+            if not raw:
+                continue
+            input_hash, title = parse_check_input_line(raw)
+            input_items.append((raw, input_hash, title))
 
     branch_desc = f"分支 '{branch}'" if branch else "当前分支"
-    logging.info(f"正在获取{branch_desc}的 git log（排除 merge commit）...")
-    lines = get_branch_log_oneline(cwd=args.repo, long_hash=args.long_hash, branch=branch)
+    logging.info(f"正在获取{branch_desc}的 git log（排除 merge commit，使用完整 hash）...")
+    lines = get_branch_log_oneline(cwd=args.repo, long_hash=True, branch=branch)
     if lines is None:
         logging.error("无法获取 git log，请确保在 git 仓库中且分支/引用有效")
         return 1
 
-    # 构建 title -> (hash, raw_line) 索引；重复 title 仅保留首次出现。
+    # 构建 title -> (full_hash, title) 索引；重复 title 仅保留首次出现（即最新提交）。
+    # 同时保留按时间顺序的提交列表，供 hash 前缀匹配。
+    commit_entries: List[Tuple[str, str]] = []
     title_to_line: Dict[str, Tuple[str, str]] = {}
     for ln in lines:
         h, title = parse_oneline_line(ln)
-        if not title:
+        if not h:
             continue
-        if title not in title_to_line:
-            title_to_line[title] = (h, ln)
+        full_hash = h.lower()
+        commit_entries.append((full_hash, title))
+        if title and title not in title_to_line:
+            title_to_line[title] = (full_hash, title)
+
+    def find_commit_by_hash_prefix(input_hash: str) -> Tuple[Optional[Tuple[str, str]], bool]:
+        """按 hash 前缀匹配提交。
+
+        返回 (matched_commit, is_ambiguous)：
+        - matched_commit: (full_hash, title) 或 None
+        - is_ambiguous: 是否匹配到多个候选
+        """
+        candidates = [entry for entry in commit_entries if entry[0].startswith(input_hash)]
+        if not candidates:
+            return None, False
+        if len(candidates) > 1:
+            return None, True
+        return candidates[0], False
 
     repo = args.repo or "."
     results: List[Tuple[int, str, str, str, str, str]] = []
     matched_commit_ids: List[str] = []
+    seen_commit_ids = set()
 
-    for title in titles:
-        logging.debug(f"正在检查: {title}")
-        if title in title_to_line:
-            commit_id, _ = title_to_line[title]
-            matched_commit_ids.append(commit_id)
+    # 每项结构:
+    # (display_title, full_hash, matched_title, status)
+    matched_rows: List[Tuple[str, str, str, str]] = []
+    for raw, input_hash, input_title in input_items:
+        logging.debug(f"正在检查: {raw}")
+        matched: Optional[Tuple[str, str]] = None
+
+        # check 语义保持“按 title 为主”：即使输入为 "hash title"，
+        # 也优先按 title 匹配，以兼容跨分支 cherry-pick 后 hash 变化的场景。
+        if input_title:
+            matched = title_to_line.get(input_title)
+            if matched is not None and input_hash and not matched[0].startswith(input_hash):
+                logging.debug(f"  ! 输入 hash 与 title 命中提交不一致，按 title 结果为准: {input_hash}")
+
+        # title 未命中时，回退按 hash 前缀匹配（用于支持仅 hash 输入）。
+        if matched is None and input_hash:
+            matched, ambiguous = find_commit_by_hash_prefix(input_hash)
+            if ambiguous:
+                logging.warning(f"  ! hash 前缀不唯一，且 title 未命中: {input_hash}")
+
+        if matched is not None:
+            full_hash, matched_title = matched
+            display_title = input_title or matched_title or raw
+            matched_rows.append((display_title, full_hash, matched_title, "Y"))
+            if full_hash not in seen_commit_ids:
+                matched_commit_ids.append(full_hash)
+                seen_commit_ids.add(full_hash)
+        else:
+            display_title = input_title or raw
+            matched_rows.append((display_title, "", "", "N"))
 
     # 先批量获取命中提交的元信息，减少逐条 git 调用。
     commit_info_map = get_batch_commit_info(matched_commit_ids, cwd=repo)
 
-    for title in titles:
-        if title in title_to_line:
-            commit_id, _ = title_to_line[title]
-            status = "Y"
-
-            info = commit_info_map.get(commit_id, {})
+    for display_title, full_hash, _matched_title, status in matched_rows:
+        if status == "Y" and full_hash:
+            info = commit_info_map.get(full_hash, {})
             git_describe = info.get("describe", "")
             commit_timestamp = info.get("timestamp", 0)
             commit_time = info.get("commit_time", "")
 
+            if args.long_hash:
+                commit_id_out = full_hash
+            else:
+                # 默认输出短 hash，保持与 oneline 风格一致。
+                commit_id_out = full_hash[:12]
+
             results.append(
-                (commit_timestamp, title, commit_id, status, git_describe, commit_time)
+                (commit_timestamp, display_title, commit_id_out, status, git_describe, commit_time)
             )
             if git_describe:
-                logging.info(f"  ✓ 找到: {commit_id}, 状态: {status}, describe: {git_describe}, 时间: {commit_time}")
+                logging.info(f"  ✓ 找到: {commit_id_out}, 状态: {status}, describe: {git_describe}, 时间: {commit_time}")
             else:
-                logging.info(f"  ✓ 找到: {commit_id}, 状态: {status}, 时间: {commit_time} (无法获取 describe)")
+                logging.info(f"  ✓ 找到: {commit_id_out}, 状态: {status}, 时间: {commit_time} (无法获取 describe)")
         else:
-            status = "N"
             # 用较大时间戳占位，使未命中项在排序后位于末尾。
-            results.append((9999999999, title, "", status, "", ""))
+            results.append((9999999999, display_title, "", status, "", ""))
             logging.info(f"  ✗ 未在{branch_desc}中找到")
 
     # 排序优先级：
@@ -630,11 +698,11 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     # check 子命令参数
-    p_check = sub.add_parser("check", help="按 commit title 检查是否已合入当前分支")
-    p_check.add_argument("input_file", metavar="INPUT", help="输入文件，每行一个 commit title")
+    p_check = sub.add_parser("check", help="检查提交是否已合入当前分支（支持 title 或 hash+title）")
+    p_check.add_argument("input_file", metavar="INPUT", help="输入文件，每行支持: title / hash title / hash")
     p_check.add_argument("output_file", metavar="OUTPUT", help="输出文件，格式: title|commit_id|status|git_describe|commit_time (Y/N)")
     p_check.add_argument("-b", "--branch", default=None, metavar="BRANCH", help="在指定分支上检查（默认当前分支，可为分支名或 commit/tag 等引用）")
-    p_check.add_argument("-l", "--long-hash", action="store_true", help="log 使用 40 位完整 commit hash 匹配（默认使用短 hash）")
+    p_check.add_argument("-l", "--long-hash", action="store_true", help="输出 40 位完整 commit hash（默认输出 12 位短 hash）")
     p_check.set_defaults(func=cmd_check)
 
     # cherry-pick 子命令参数
