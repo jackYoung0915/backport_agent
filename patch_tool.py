@@ -244,6 +244,321 @@ def get_batch_commit_info(commit_ids: List[str], cwd: Optional[str] = None) -> D
     return result
 
 
+# --- 核心 API（供 MCP / 外部调用） ---
+
+
+def check_commits(
+    input_lines: List[str],
+    repo: str = ".",
+    branch: Optional[str] = None,
+    long_hash: bool = False,
+) -> Dict[str, Any]:
+    """检查提交列表是否已合入目标分支，返回结构化结果。
+
+    Args:
+        input_lines: 待检查的提交列表，每项支持 'title' / 'hash title' / 'hash' 格式。
+        repo: git 仓库路径。
+        branch: 目标分支（None 表示当前分支）。
+        long_hash: 结果使用 40 位完整 hash。
+
+    Returns:
+        {"total", "matched", "unmatched", "results": [{...}]}
+    """
+    input_entries: List[Tuple[Optional[str], str]] = []
+    for line in input_lines:
+        t = line.strip()
+        if not t:
+            continue
+        src_hash, title = parse_input_line(t)
+        if title or src_hash:
+            input_entries.append((src_hash, title))
+
+    log_args = ["log", "--no-merges"]
+    if branch:
+        log_args.append(branch)
+    log_args.append("--format=%H%x01%h%x01%s")
+
+    code, log_out, _ = run_git(log_args, cwd=repo)
+    if code != 0:
+        return {
+            "error": "无法获取 git log，请确保在 git 仓库中且分支/引用有效",
+            "total": 0, "matched": 0, "unmatched": 0, "results": [],
+        }
+
+    title_index: Dict[str, Tuple[str, str]] = {}
+    hash_entries: List[Tuple[str, str, str]] = []
+    for ln in log_out.splitlines():
+        parts = ln.split("\x01", 2)
+        if len(parts) != 3:
+            continue
+        full_h, short_h, t = parts[0].strip(), parts[1].strip(), parts[2].strip()
+        if not t:
+            continue
+        if t not in title_index:
+            title_index[t] = (full_h, short_h)
+        hash_entries.append((full_h, short_h, t))
+
+    per_entry: List[Optional[Tuple[str, str, str, str]]] = []
+    for src_hash, title in input_entries:
+        matched: Optional[Tuple[str, str, str, str]] = None
+        if title and title in title_index:
+            full_h, short_h = title_index[title]
+            matched = (full_h if long_hash else short_h, full_h, title, "title")
+        if matched is None and src_hash:
+            for full_h, short_h, t in hash_entries:
+                if full_h.startswith(src_hash):
+                    matched = (full_h if long_hash else short_h, full_h, t, "hash")
+                    break
+        per_entry.append(matched)
+
+    matched_full = list(dict.fromkeys(m[1] for m in per_entry if m))
+    info_map = get_batch_commit_info(matched_full, cwd=repo)
+
+    raw: List[Tuple[int, Dict[str, Any]]] = []
+    n_matched = 0
+    for i, (src_hash, title) in enumerate(input_entries):
+        m = per_entry[i]
+        display = title if title else (m[2] if m else (src_hash or ""))
+        if m:
+            cid, full_h, mt, method = m
+            display = display or mt
+            n_matched += 1
+            ci = info_map.get(full_h, {})
+            ts = ci.get("timestamp", 0)
+            row = {
+                "title": display, "commit_id": cid, "status": "Y",
+                "git_describe": ci.get("describe", ""),
+                "commit_time": ci.get("commit_time", ""),
+                "match_method": method,
+            }
+            raw.append((ts, row))
+        else:
+            raw.append((9999999999, {
+                "title": display, "commit_id": "", "status": "N",
+                "git_describe": "", "commit_time": "", "match_method": "",
+            }))
+
+    def _sk(pair: Tuple[int, Dict[str, Any]]) -> Tuple[int, Any, int, int, str]:
+        ts, r = pair
+        if r["status"] != "Y":
+            return (2, (), 0, ts, r["title"])
+        p = parse_describe_order(r["git_describe"])
+        if p:
+            return (0, p[0], p[1], ts, r["title"])
+        return (1, (), 0, ts, r["title"])
+
+    raw.sort(key=_sk)
+    return {
+        "total": len(input_entries),
+        "matched": n_matched,
+        "unmatched": len(input_entries) - n_matched,
+        "results": [r for _, r in raw],
+    }
+
+
+def cherry_pick_commits(
+    input_lines: List[str],
+    repo: str = ".",
+    signoff: bool = True,
+    start: int = 1,
+) -> Dict[str, Any]:
+    """批量 cherry-pick（非交互模式，遇冲突自动 abort 并停止）。
+
+    Args:
+        input_lines: 补丁列表，每项支持 'hash [title]' 或 check 输出格式。
+        repo: git 仓库路径。
+        signoff: 是否使用 --signoff。
+        start: 从第几个有效提交开始（1-based）。
+
+    Returns:
+        {"total_valid", "processed", "succeeded", "skipped_invalid",
+         "skipped_not_merged", "conflict", "results": [{...}]}
+    """
+    entries: List[Tuple[str, str]] = []
+    skipped_not_merged = 0
+    for line in input_lines:
+        line = line.strip()
+        if not line:
+            continue
+        cp = parse_check_output_line(line)
+        if cp is not None:
+            cid, title, st = cp
+            if st == "N":
+                skipped_not_merged += 1
+                continue
+            entries.append((cid, title))
+        else:
+            h, rest = parse_oneline_line(line)
+            entries.append((h or "", rest))
+
+    total = sum(1 for h, _ in entries if is_valid_commit_hash(h))
+    start = max(1, start)
+    signoff_args: List[str] = ["--signoff"] if signoff else []
+
+    results: List[Dict[str, str]] = []
+    processed = 0
+    succeeded = 0
+    skipped_invalid = 0
+    conflict: Optional[Dict[str, str]] = None
+
+    for h, rest in entries:
+        if not is_valid_commit_hash(h):
+            skipped_invalid += 1
+            results.append({"hash": h, "title": rest, "status": "SKIP"})
+            continue
+
+        processed += 1
+        if processed < start:
+            results.append({"hash": h, "title": rest, "status": "SKIP"})
+            continue
+
+        code, stdout, stderr = run_git(
+            ["cherry-pick"] + signoff_args + [h], cwd=repo,
+        )
+        if code == 0:
+            succeeded += 1
+            results.append({"hash": h, "title": rest, "status": "OK"})
+        else:
+            run_git(["cherry-pick", "--abort"], cwd=repo)
+            conflict = {"hash": h, "title": rest, "message": stderr or stdout}
+            results.append({"hash": h, "title": rest, "status": "CONFLICT"})
+            break
+
+    return {
+        "total_valid": total,
+        "processed": processed,
+        "succeeded": succeeded,
+        "skipped_invalid": skipped_invalid,
+        "skipped_not_merged": skipped_not_merged,
+        "conflict": conflict,
+        "results": results,
+    }
+
+
+def sync_meta_commits(
+    source_branch: str,
+    commit_range: str,
+    repo: str = ".",
+    dry_run: bool = True,
+) -> Dict[str, Any]:
+    """根据参考分支同名提交同步作者/时间元数据。
+
+    Args:
+        source_branch: 参考分支名/引用。
+        commit_range: 当前分支提交范围，如 'base..HEAD'。
+        repo: git 仓库路径。
+        dry_run: 若 True 只返回预览不实际改写。
+
+    Returns:
+        {"total_in_range", "matched", "skipped_not_found", "skipped_ambiguous",
+         "changes": [{...}], "applied": bool}
+    """
+    code, out, err = run_git(
+        ["log", "--no-merges",
+         "--format=%H%x01%s%x01%an%x01%ae%x01%ad", source_branch],
+        cwd=repo,
+    )
+    if code != 0:
+        return {"error": f"无法获取参考分支 {source_branch} 的 log: {err}",
+                "total_in_range": 0, "matched": 0, "skipped_not_found": 0,
+                "skipped_ambiguous": 0, "changes": [], "applied": False}
+
+    title_to_src: Dict[str, List[Dict[str, str]]] = {}
+    for ln in out.splitlines():
+        if not ln.strip():
+            continue
+        parts = ln.split("\x01")
+        if len(parts) != 5:
+            continue
+        sh, t, an, ae, ad = parts
+        t = t.strip()
+        if not t:
+            continue
+        title_to_src.setdefault(t, []).append(
+            {"hash": sh, "an": an, "ae": ae, "ad": ad}
+        )
+
+    code, out, err = run_git(
+        ["log", "--no-merges", "--format=%H%x01%s", commit_range], cwd=repo,
+    )
+    if code != 0:
+        return {"error": f"无法获取提交范围 {commit_range} 的 log: {err}",
+                "total_in_range": 0, "matched": 0, "skipped_not_found": 0,
+                "skipped_ambiguous": 0, "changes": [], "applied": False}
+
+    commits_in_range: List[Tuple[str, str]] = []
+    for ln in out.splitlines():
+        if not ln.strip():
+            continue
+        h, t = ln.split("\x01", 1)
+        commits_in_range.append((h.strip(), t.strip()))
+
+    changes: List[Dict[str, str]] = []
+    commit_to_meta: Dict[str, Dict[str, str]] = {}
+    skipped_nf = 0
+    skipped_amb = 0
+
+    for h, title in commits_in_range:
+        src_list = title_to_src.get(title)
+        if not src_list:
+            skipped_nf += 1
+            continue
+        if len(src_list) > 1:
+            skipped_amb += 1
+            continue
+        src = src_list[0]
+
+        code2, cur, _ = run_git(
+            ["log", "-1", "--format=%an%x01%ae%x01%ad", h], cwd=repo,
+        )
+        old_an = old_ae = old_ad = ""
+        if code2 == 0 and cur:
+            p = cur.split("\x01")
+            if len(p) == 3:
+                old_an, old_ae, old_ad = p
+
+        changes.append({
+            "hash": h, "title": title,
+            "old_author": f"{old_an} <{old_ae}>",
+            "new_author": f"{src['an']} <{src['ae']}>",
+            "old_date": old_ad, "new_date": src["ad"],
+        })
+        commit_to_meta[h] = src
+
+    applied = False
+    error = None
+    if commit_to_meta and not dry_run:
+        lines = ['case "$GIT_COMMIT" in']
+        for commit, meta in commit_to_meta.items():
+            lines.append(f"  {commit})")
+            lines.append(f"    export GIT_AUTHOR_NAME={shlex.quote(meta['an'])}")
+            lines.append(f"    export GIT_AUTHOR_EMAIL={shlex.quote(meta['ae'])}")
+            lines.append(f"    export GIT_AUTHOR_DATE={shlex.quote(meta['ad'])}")
+            lines.append("    ;;")
+        lines.append("esac")
+        env_filter = "\n".join(lines)
+        code, _, serr = run_git(
+            ["filter-branch", "-f", "--env-filter", env_filter, commit_range],
+            cwd=repo,
+        )
+        if code != 0:
+            error = f"git filter-branch 执行失败: {serr}"
+        else:
+            applied = True
+
+    result: Dict[str, Any] = {
+        "total_in_range": len(commits_in_range),
+        "matched": len(changes),
+        "skipped_not_found": skipped_nf,
+        "skipped_ambiguous": skipped_amb,
+        "changes": changes,
+        "applied": applied,
+    }
+    if error:
+        result["error"] = error
+    return result
+
+
 # --- check 子命令 ---
 
 
