@@ -5,7 +5,7 @@
 
 提供三个子命令：
   check
-      按 commit title 检查是否已合入目标分支，并输出带状态和时间的报告。
+      按 commit title 检查是否已合入目标分支，并按 describe 合入序输出报告。
   cherry-pick
       从补丁列表批量执行 cherry-pick，支持 --signoff、冲突暂停与续跑。
   sync-meta
@@ -90,6 +90,44 @@ def is_valid_commit_hash(s: str) -> bool:
     return bool(s and re.match(r"^[0-9a-f]{10,40}$", s.lower()))
 
 
+def _natural_sort_key(text: str) -> Tuple[Tuple[int, Any], ...]:
+    """为字符串生成自然排序 key（例如 v6.6 < v6.10）。"""
+    key: List[Tuple[int, Any]] = []
+    for part in re.split(r"(\d+)", text.lower()):
+        if not part:
+            continue
+        if part.isdigit():
+            key.append((0, int(part)))
+        else:
+            key.append((1, part))
+    return tuple(key)
+
+
+def parse_describe_order(describe: str) -> Optional[Tuple[Tuple[Tuple[int, Any], ...], int]]:
+    """解析 git describe，提取用于排序的 (tag_key, distance)。
+
+    - 形如 '<tag>-<distance>-g<hash>' 时，distance 表示相对 tag 的提交距离。
+    - 形如 '<tag>'（正好命中 tag）时，distance 视为 0。
+    - 若 describe 仅为 hash（无 tag）或为空，返回 None。
+    """
+    if not describe:
+        return None
+
+    desc = describe.strip()
+    m = re.match(r"^(.+)-(\d+)-g[0-9a-f]+(?:-.+)?$", desc.lower())
+    if m:
+        tag = m.group(1)
+        distance = int(m.group(2))
+        return (_natural_sort_key(tag), distance)
+
+    # --always 在无 tag 场景下可能返回短 hash；此时无法从 describe 推导顺序。
+    if re.fullmatch(r"[0-9a-f]{7,40}", desc.lower()):
+        return None
+
+    # 命中 tag（无 -N-gHASH 后缀）
+    return (_natural_sort_key(desc), 0)
+
+
 def get_batch_commit_info(commit_ids: List[str], cwd: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
     """批量查询多个提交的元信息。
 
@@ -170,7 +208,7 @@ def get_batch_commit_info(commit_ids: List[str], cwd: Optional[str] = None) -> D
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    """检查输入文件中的 commit title 是否已合入目标分支。"""
+    """检查输入文件中的 commit title 是否已合入目标分支并排序输出。"""
     inp = Path(args.input_file)
     out = Path(args.output_file)
     branch = args.branch
@@ -239,13 +277,29 @@ def cmd_check(args: argparse.Namespace) -> int:
             results.append((9999999999, title, "", status, "", ""))
             logging.info(f"  ✗ 未在{branch_desc}中找到")
 
-    results.sort(key=lambda x: x[0])
+    # 排序优先级：
+    # 1) status=Y 且 describe 可解析：按 tag + distance（合入序）排序
+    # 2) status=Y 但 describe 不可解析：回退按时间戳排序
+    # 3) status=N：置于末尾
+    def result_sort_key(item: Tuple[int, str, str, str, str, str]) -> Tuple[int, Any, int, int, str]:
+        commit_timestamp, title, _commit_id, status, git_describe, _commit_time = item
+        if status != "Y":
+            return (2, (), 0, commit_timestamp, title)
+
+        parsed = parse_describe_order(git_describe)
+        if parsed is not None:
+            tag_key, distance = parsed
+            return (0, tag_key, distance, commit_timestamp, title)
+
+        return (1, (), 0, commit_timestamp, title)
+
+    results.sort(key=result_sort_key)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
         for _, title, commit_id, status, git_describe, commit_time in results:
             f.write(f"{title}|{commit_id}|{status}|{git_describe}|{commit_time}\n")
 
-    logging.info(f"检查完成，结果已保存到 {out}（已按合入时间排序）")
+    logging.info(f"检查完成，结果已保存到 {out}（优先按 describe 合入序排序）")
     return 0
 
 
