@@ -115,6 +115,21 @@ def parse_input_line(line: str) -> Tuple[Optional[str], str]:
     return None, line
 
 
+def parse_check_output_line(line: str) -> Optional[Tuple[str, str, str]]:
+    """尝试将行解析为 check 输出格式: title|commit_id|Y/N|git_describe|commit_time。
+
+    使用从右侧分割的策略，以正确处理 title 中可能包含 '|' 的情况。
+    返回 (commit_hash, title, status)；若不是 check 格式则返回 None。
+    """
+    parts = line.strip().rsplit("|", 4)
+    if len(parts) != 5:
+        return None
+    title, commit_id, status = parts[0].strip(), parts[1].strip(), parts[2].strip()
+    if status not in ("Y", "N"):
+        return None
+    return (commit_id, title, status)
+
+
 def _natural_sort_key(text: str) -> Tuple[Tuple[int, Any], ...]:
     """为字符串生成自然排序 key（例如 v6.6 < v6.10）。"""
     key: List[Tuple[int, Any]] = []
@@ -380,20 +395,39 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 
 def cmd_cherry_pick(args: argparse.Namespace) -> int:
-    """从补丁列表文件批量执行 cherry-pick。"""
+    """从补丁列表文件批量执行 cherry-pick。
+
+    输入文件同时兼容以下格式（可混合使用）：
+      - hash [title]              — 标准补丁列表
+      - check 输出行              — title|commit_id|Y/N|describe|time
+    check 输出中 status=N 的行会被自动跳过。
+    """
     patch_file = Path(args.patch_file)
     if not patch_file.is_file():
         logging.error(f"补丁文件不存在 '{patch_file}'")
         return 1
 
     entries: List[Tuple[str, str]] = []
+    skipped_not_merged = 0
     with open(patch_file, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            h, rest = parse_oneline_line(line)
-            entries.append((h, rest))
+            check_parsed = parse_check_output_line(line)
+            if check_parsed is not None:
+                commit_id, title, status = check_parsed
+                if status == "N":
+                    skipped_not_merged += 1
+                    logging.debug(f"跳过 check 输出 status=N: {title}")
+                    continue
+                entries.append((commit_id, title))
+            else:
+                h, rest = parse_oneline_line(line)
+                entries.append((h, rest))
+
+    if skipped_not_merged:
+        logging.info(f"已跳过 {skipped_not_merged} 条 check 输出中 status=N 的记录")
 
     # total 仅统计合法 hash，用于统一进度口径。
     valid = [(h, rest) for h, rest in entries if is_valid_commit_hash(h)]
@@ -717,8 +751,8 @@ def main() -> int:
     p_check.set_defaults(func=cmd_check)
 
     # cherry-pick 子命令参数
-    p_cp = sub.add_parser("cherry-pick", help="从补丁列表批量 cherry-pick")
-    p_cp.add_argument("patch_file", metavar="PATCH_FILE", help="补丁文件，每行: commit_hash 或 commit_hash 空格 commit_title")
+    p_cp = sub.add_parser("cherry-pick", help="从补丁列表批量 cherry-pick（兼容 check 输出）")
+    p_cp.add_argument("patch_file", metavar="PATCH_FILE", help="补丁文件，支持 'hash [title]' 或 check 输出格式（status=N 自动跳过）")
     p_cp.add_argument("start", nargs="?", default="1", metavar="START", help="从第几个有效提交开始（默认 1）")
     p_cp.add_argument("-o", "--output", dest="log_file", default=None, metavar="FILE", help="将处理结果写入文件（每行: 状态|hash|描述）")
     p_cp.add_argument("-n", "--no-signoff", action="store_true", help="不使用 git cherry-pick --signoff")
