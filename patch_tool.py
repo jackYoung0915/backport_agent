@@ -57,6 +57,131 @@ def run_git(args: List[str], capture: bool = True, check: bool = False, cwd: Opt
         return (e.returncode, out, err)
 
 
+def _has_filter_repo(cwd: Optional[str] = None) -> bool:
+    """检查 git-filter-repo 是否可用。"""
+    code, _, _ = run_git(["filter-repo", "--version"], cwd=cwd)
+    return code == 0
+
+
+def _resolve_backend(backend: str, cwd: Optional[str] = None) -> str:
+    """将后端选择 'auto' 解析为具体后端名称。
+
+    Returns:
+        'filter-repo' 或 'filter-branch'
+
+    Raises:
+        RuntimeError: 当指定 'filter-repo' 但未安装时。
+    """
+    if backend == "filter-repo":
+        if not _has_filter_repo(cwd):
+            raise RuntimeError(
+                "git-filter-repo 未安装。"
+                "请通过 'pip install git-filter-repo' 安装，"
+                "或使用 --backend filter-branch 回退到 git filter-branch。"
+            )
+        return "filter-repo"
+    if backend == "filter-branch":
+        return "filter-branch"
+    return "filter-repo" if _has_filter_repo(cwd) else "filter-branch"
+
+
+def _get_raw_author_dates(hashes: List[str], cwd: Optional[str] = None) -> Dict[str, str]:
+    """批量获取提交的 raw 格式作者时间（'epoch +tz'）。"""
+    if not hashes:
+        return {}
+    code, out, _ = run_git(
+        ["log", "--no-walk", "--date=raw", "--format=%H%x01%ad"] + hashes,
+        cwd=cwd,
+    )
+    result: Dict[str, str] = {}
+    if code == 0:
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("\x01", 1)
+            if len(parts) == 2:
+                result[parts[0].strip()] = parts[1].strip()
+    return result
+
+
+def _build_filter_repo_callback(
+    commit_to_meta: Dict[str, Dict[str, str]],
+    raw_dates: Dict[str, str],
+) -> str:
+    """构建 git filter-repo --commit-callback 所需的 Python 代码片段。
+
+    生成一段按 original_id 精确匹配的回调脚本，用于替换作者元信息。
+    """
+    lines = ["m = {"]
+    for commit_hash, meta in commit_to_meta.items():
+        src_hash = meta["hash"]
+        raw_ad = raw_dates.get(src_hash, meta["ad"])
+        key = commit_hash.encode("utf-8")
+        name = meta["an"].encode("utf-8")
+        email = meta["ae"].encode("utf-8")
+        date = raw_ad.encode("utf-8")
+        lines.append(f"  {key!r}: ({name!r}, {email!r}, {date!r}),")
+    lines.append("}")
+    lines.append("if commit.original_id in m:")
+    lines.append("  n, e, d = m[commit.original_id]")
+    lines.append("  commit.author_name = n")
+    lines.append("  commit.author_email = e")
+    lines.append("  commit.author_date = d")
+    return "\n".join(lines)
+
+
+def _apply_filter_repo(
+    commit_to_meta: Dict[str, Dict[str, str]],
+    commit_range: str,
+    cwd: str,
+    capture: bool = True,
+) -> Tuple[int, str]:
+    """使用 git filter-repo 应用作者元数据变更。
+
+    自动获取 raw 格式时间戳，构建 --commit-callback 脚本并执行。
+    使用 --partial --force 以确保仅改写指定范围且允许在非 fresh clone 上运行。
+    """
+    src_hashes = [meta["hash"] for meta in commit_to_meta.values()]
+    raw_dates = _get_raw_author_dates(src_hashes, cwd=cwd)
+    callback = _build_filter_repo_callback(commit_to_meta, raw_dates)
+    code, _, err = run_git(
+        ["filter-repo", "--force", "--partial",
+         "--refs", commit_range,
+         "--commit-callback", callback],
+        cwd=cwd,
+        capture=capture,
+    )
+    return code, err
+
+
+def _apply_filter_branch(
+    commit_to_meta: Dict[str, Dict[str, str]],
+    commit_range: str,
+    cwd: str,
+    capture: bool = True,
+) -> Tuple[int, str]:
+    """使用 git filter-branch 应用作者元数据变更。
+
+    构建 shell case 语句作为 --env-filter，按 commit hash 精确覆写作者字段。
+    """
+    lines = ['case "$GIT_COMMIT" in']
+    for commit, meta in commit_to_meta.items():
+        lines.append(f"  {commit})")
+        lines.append(f"    export GIT_AUTHOR_NAME={shlex.quote(meta['an'])}")
+        lines.append(f"    export GIT_AUTHOR_EMAIL={shlex.quote(meta['ae'])}")
+        lines.append(f"    export GIT_AUTHOR_DATE={shlex.quote(meta['ad'])}")
+        lines.append("    ;;")
+    lines.append("esac")
+    env_filter = "\n".join(lines)
+    code, _, err = run_git(
+        ["filter-branch", "-f", "--env-filter", env_filter, commit_range],
+        cwd=cwd,
+        capture=capture,
+    )
+    return code, err
+
+
 def get_branch_log_oneline(cwd: Optional[str] = None, long_hash: bool = False, branch: Optional[str] = None) -> Optional[List[str]]:
     """获取指定分支的非 merge 提交列表（每项一行）。
 
@@ -440,6 +565,7 @@ def sync_meta_commits(
     commit_range: str,
     repo: str = ".",
     dry_run: bool = True,
+    backend: str = "auto",
 ) -> Dict[str, Any]:
     """根据参考分支同名提交同步作者/时间元数据。
 
@@ -448,10 +574,11 @@ def sync_meta_commits(
         commit_range: 当前分支提交范围，如 'base..HEAD'。
         repo: git 仓库路径。
         dry_run: 若 True 只返回预览不实际改写。
+        backend: 历史改写后端，'auto'（默认）、'filter-repo' 或 'filter-branch'。
 
     Returns:
         {"total_in_range", "matched", "skipped_not_found", "skipped_ambiguous",
-         "changes": [{...}], "applied": bool}
+         "changes": [{...}], "applied": bool, "backend": str|None}
     """
     code, out, err = run_git(
         ["log", "--no-merges",
@@ -527,24 +654,25 @@ def sync_meta_commits(
 
     applied = False
     error = None
+    resolved_backend = None
     if commit_to_meta and not dry_run:
-        lines = ['case "$GIT_COMMIT" in']
-        for commit, meta in commit_to_meta.items():
-            lines.append(f"  {commit})")
-            lines.append(f"    export GIT_AUTHOR_NAME={shlex.quote(meta['an'])}")
-            lines.append(f"    export GIT_AUTHOR_EMAIL={shlex.quote(meta['ae'])}")
-            lines.append(f"    export GIT_AUTHOR_DATE={shlex.quote(meta['ad'])}")
-            lines.append("    ;;")
-        lines.append("esac")
-        env_filter = "\n".join(lines)
-        code, _, serr = run_git(
-            ["filter-branch", "-f", "--env-filter", env_filter, commit_range],
-            cwd=repo,
-        )
-        if code != 0:
-            error = f"git filter-branch 执行失败: {serr}"
-        else:
-            applied = True
+        try:
+            resolved_backend = _resolve_backend(backend, cwd=repo)
+        except RuntimeError as e:
+            error = str(e)
+
+        if resolved_backend == "filter-repo":
+            code, serr = _apply_filter_repo(commit_to_meta, commit_range, repo)
+            if code != 0:
+                error = f"git filter-repo 执行失败: {serr}"
+            else:
+                applied = True
+        elif resolved_backend == "filter-branch":
+            code, serr = _apply_filter_branch(commit_to_meta, commit_range, repo)
+            if code != 0:
+                error = f"git filter-branch 执行失败: {serr}"
+            else:
+                applied = True
 
     result: Dict[str, Any] = {
         "total_in_range": len(commits_in_range),
@@ -553,6 +681,7 @@ def sync_meta_commits(
         "skipped_ambiguous": skipped_amb,
         "changes": changes,
         "applied": applied,
+        "backend": resolved_backend,
     }
     if error:
         result["error"] = error
@@ -993,37 +1122,30 @@ def cmd_sync_meta(args):
         print("当前为 --dry-run 模式，不会真正改写 git 历史。")
         return 0
 
+    # 4) 解析后端并执行历史改写。
+    try:
+        resolved = _resolve_backend(args.backend, cwd=repo)
+    except RuntimeError as e:
+        print(f"错误: {e}", file=sys.stderr)
+        return 1
+
     print("")
-    print("即将通过 'git filter-branch --env-filter' 改写历史。")
+    print(f"即将通过 'git {resolved}' 改写历史。")
     print("注意: 这会重写当前分支历史，后续需要使用 push --force 推送到远端（如有）。")
 
-    # 4) 构造 env-filter 脚本：按 commit hash 精确覆写作者字段。
-    lines = ['case "$GIT_COMMIT" in']
-    for commit, meta in commit_to_meta.items():
-        lines.append(f"  {commit})")
-        lines.append(
-            f"    export GIT_AUTHOR_NAME={shlex.quote(meta['an'])}"
-        )
-        lines.append(
-            f"    export GIT_AUTHOR_EMAIL={shlex.quote(meta['ae'])}"
-        )
-        lines.append(
-            f"    export GIT_AUTHOR_DATE={shlex.quote(meta['ad'])}"
-        )
-        lines.append("    ;;")
-    lines.append("esac")
-    env_filter = "\n".join(lines)
-
-    # 5) 执行 filter-branch 改写指定范围历史。
     print("")
-    print("开始执行 git filter-branch ...")
-    code, _, _ = run_git(
-        ["filter-branch", "-f", "--env-filter", env_filter, commit_range],
-        cwd=repo,
-        capture=False,
-    )
+    print(f"开始执行 git {resolved} ...")
+    if resolved == "filter-repo":
+        code, err = _apply_filter_repo(
+            commit_to_meta, commit_range, repo, capture=False,
+        )
+    else:
+        code, err = _apply_filter_branch(
+            commit_to_meta, commit_range, repo, capture=False,
+        )
+
     if code != 0:
-        print("错误: git filter-branch 执行失败。", file=sys.stderr)
+        print(f"错误: git {resolved} 执行失败。", file=sys.stderr)
         return 1
 
     print("")
@@ -1092,6 +1214,12 @@ def main() -> int:
         "--dry-run",
         action="store_true",
         help="仅显示将要修改的提交，不实际改写 git 历史",
+    )
+    p_sync.add_argument(
+        "--backend",
+        choices=["auto", "filter-repo", "filter-branch"],
+        default="auto",
+        help="历史改写后端（默认 auto：优先 filter-repo，不可用时回退 filter-branch）",
     )
     p_sync.set_defaults(func=cmd_sync_meta)
 
