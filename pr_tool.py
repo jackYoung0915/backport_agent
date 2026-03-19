@@ -4,7 +4,7 @@
 PR 信息统计工具。
 
 从输入文件读取 PR 链接，统计每个 PR 的 commit 数量和代码行数变更，
-支持 gitee、gitcode 平台。
+支持 gitee、gitcode、atomgit 平台。
 
 输出格式（每行）: url|platform|commit_count|lines_changed|error
 """
@@ -26,13 +26,14 @@ def _decode_output(data: Optional[bytes]) -> str:
     return (data or b"").decode("utf-8", errors="replace").strip()
 
 
-def _make_request(url: str, token: Optional[str] = None, timeout: int = 15) -> Tuple[int, str]:
+def _make_request(url: str, token: Optional[str] = None, timeout: int = 15, use_private_token: bool = False) -> Tuple[int, str]:
     """发起 HTTP GET 请求并返回状态码和响应体。
 
     Args:
         url: 请求 URL
         token: 可选的访问 token
         timeout: 超时时间（秒）
+        use_private_token: 是否使用 private-token header（atomgit 使用）
 
     Returns:
         (status_code, response_body)
@@ -42,9 +43,13 @@ def _make_request(url: str, token: Optional[str] = None, timeout: int = 15) -> T
         "User-Agent": "pr_tool/1.0",
     }
     if token:
-        # gitee 和 gitcode 都支持 access_token 参数
-        sep = "&" if "?" in url else "?"
-        url = f"{url}{sep}access_token={token}"
+        if use_private_token:
+            # atomgit 使用 private-token header
+            headers["private-token"] = token
+        else:
+            # gitee 和 gitcode 都支持 access_token 参数
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}access_token={token}"
 
     try:
         req = urllib.request.Request(url, headers=headers)
@@ -109,6 +114,7 @@ def _parse_gitcode_pr_url(url: str) -> Optional[Tuple[str, str, str]]:
     支持格式:
     - https://gitcode.net/owner/repo/-/merge_requests/123
     - https://gitcode.net/owner/repo/merge_requests/123
+    - https://gitcode.com/owner/repo/pull/123
 
     Returns:
         (owner, repo, pr_number) 或 None
@@ -122,11 +128,51 @@ def _parse_gitcode_pr_url(url: str) -> Optional[Tuple[str, str, str]]:
         path = parsed.path.rstrip("/")
         parts = [p for p in path.split("/") if p]
 
-        # gitcode 使用 merge_requests，可能有 "-" 前缀
-        # 格式: [owner, repo, '-', merge_requests, number] 或 [owner, repo, merge_requests, number]
+        # gitcode 使用 merge_requests 或 pull
+        # 格式: [owner, repo, '-', merge_requests, number] 或 [owner, repo, merge_requests, number] 或 [owner, repo, pull, number]
         idx = -1
         for i, p in enumerate(parts):
             if p in ("merge_requests", "pulls", "pull"):
+                idx = i
+                break
+
+        if idx < 0 or idx + 1 >= len(parts):
+            return None
+
+        owner = parts[0]
+        repo = parts[1]
+        pr_num = parts[idx + 1]
+
+        if pr_num.isdigit():
+            return (owner, repo, pr_num)
+        return None
+    except Exception:
+        return None
+
+
+def _parse_atomgit_pr_url(url: str) -> Optional[Tuple[str, str, str]]:
+    """解析 atomgit PR URL。
+
+    支持格式:
+    - https://atomgit.com/owner/repo/pull/123
+
+    Returns:
+        (owner, repo, pr_number) 或 None
+    """
+    try:
+        parsed = urllib.parse.urlparse(url.strip())
+        netloc = parsed.netloc.lower()
+        if "atomgit.com" not in netloc:
+            return None
+
+        path = parsed.path.rstrip("/")
+        parts = [p for p in path.split("/") if p]
+
+        # atomgit 使用 pull
+        # 格式: [owner, repo, pull, number]
+        idx = -1
+        for i, p in enumerate(parts):
+            if p in ("pulls", "pull"):
                 idx = i
                 break
 
@@ -149,8 +195,12 @@ def _detect_platform(url: str) -> Optional[str]:
     url_lower = url.lower()
     if "gitee.com" in url_lower:
         return "gitee"
-    if "gitcode.net" in url_lower or "gitcode.com" in url_lower:
-        return "gitcode"
+    if "gitcode.net" in url_lower:
+        return "gitcode"  # GitLab API
+    if "gitcode.com" in url_lower:
+        return "gitcode_com"  # REST API v5，与 gitee/atomgit 类似
+    if "atomgit.com" in url_lower:
+        return "atomgit"
     return None
 
 
@@ -171,16 +221,32 @@ def _fetch_gitee_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[st
         return {
             "commit_count": -1,
             "lines_changed": -1,
+            "commits": "",
             "error": f"commits API failed: status={status}, body={body[:200]}",
         }
 
     try:
         commits_data = json.loads(body)
         commit_count = len(commits_data) if isinstance(commits_data, list) else 0
+
+        # 提取 commit SHA 和 title，格式：commit_id commit_title（每行一个）
+        commits = ""
+        if isinstance(commits_data, list):
+            lines = []
+            for c in commits_data:
+                sha = c.get("sha", "")
+                title = ""
+                if "commit" in c and isinstance(c["commit"], dict):
+                    title = c["commit"].get("message", "")
+                # 只保留第一行作为 title
+                title = title.split("\n")[0] if title else ""
+                lines.append(f"{sha} {title}")
+            commits = "\n".join(lines)
     except json.JSONDecodeError:
         return {
             "commit_count": -1,
             "lines_changed": -1,
+            "commits": "",
             "error": f"commits JSON parse error: {body[:200]}",
         }
 
@@ -207,6 +273,7 @@ def _fetch_gitee_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[st
     return {
         "commit_count": commit_count,
         "lines_changed": lines_changed,
+        "commits": commits,
         "error": "" if commit_count >= 0 else "unknown",
     }
 
@@ -231,22 +298,86 @@ def _fetch_gitcode_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[
         return {
             "commit_count": -1,
             "lines_changed": -1,
+            "commits": "",
             "error": f"commits API failed: status={status}, body={body[:200]}",
         }
 
     try:
         commits_data = json.loads(body)
         commit_count = len(commits_data) if isinstance(commits_data, list) else 0
+
+        # 提取 commit SHA 和 title，格式：commit_id commit_title（每行一个）
+        commits = ""
+        if isinstance(commits_data, list):
+            lines = []
+            for c in commits_data:
+                # GitLab/GitCode 使用 id 字段作为 SHA
+                commit_id = c.get("id", "")
+                # title 或 message 字段作为标题
+                title = c.get("title", "") or c.get("message", "")
+                # 只保留第一行作为 title
+                title = title.split("\n")[0] if title else ""
+                lines.append(f"{commit_id} {title}")
+            commits = "\n".join(lines)
     except json.JSONDecodeError:
         return {
             "commit_count": -1,
             "lines_changed": -1,
+            "commits": "",
+            "error": f"commits JSON parse error: {body[:200]}",
+        }
+    """获取 gitcode (GitLab) PR 的 commit 数量和行数变更。
+
+    GitLab/GitCode API:
+    1. /projects/{id}/merge_requests/{iid}/commits - 获取 commit 列表
+    2. /projects/{id}/merge_requests/{iid}/changes - 获取变更详情（包含 additions/deletions）
+    """
+    # 需要先获取 project id，因为 API 使用 path-encoded project ID
+    # owner/repo 需要 URL encode
+    proj_id = urllib.parse.quote(f"{owner}/{repo}", safe="")
+    base_url = "https://gitcode.net/api/v4"
+
+    # 1. 获取 commits
+    commits_url = f"{base_url}/projects/{proj_id}/merge_requests/{pr_num}/commits"
+    # gitcode 需要 private-token
+    status, body = _make_request(commits_url, token, timeout, use_private_token=True)
+
+    if status != 200:
+        return {
+            "commit_count": -1,
+            "lines_changed": -1,
+            "commits": "",
+            "error": f"commits API failed: status={status}, body={body[:200]}",
+        }
+
+    try:
+        commits_data = json.loads(body)
+        commit_count = len(commits_data) if isinstance(commits_data, list) else 0
+
+        # 提取 commit SHA 和 title，格式：commit_id commit_title（每行一个）
+        commits = ""
+        if isinstance(commits_data, list):
+            lines = []
+            for c in commits_data:
+                # GitLab/GitCode 使用 id 字段作为 SHA
+                commit_id = c.get("id", "")
+                # title 或 message 字段作为标题
+                title = c.get("title", "") or c.get("message", "")
+                # 只保留第一行作为 title
+                title = title.split("\n")[0] if title else ""
+                lines.append(f"{commit_id} {title}")
+            commits = "\n".join(lines)
+    except json.JSONDecodeError:
+        return {
+            "commit_count": -1,
+            "lines_changed": -1,
+            "commits": "",
             "error": f"commits JSON parse error: {body[:200]}",
         }
 
     # 2. 获取 changes（包含 additions/deletions）
     changes_url = f"{base_url}/projects/{proj_id}/merge_requests/{pr_num}/changes"
-    status, body = _make_request(changes_url, token, timeout)
+    status, body = _make_request(changes_url, token, timeout, use_private_token=True)
 
     lines_changed = 0
     if status == 200:
@@ -280,6 +411,153 @@ def _fetch_gitcode_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[
     return {
         "commit_count": commit_count,
         "lines_changed": lines_changed,
+        "commits": commits,
+        "error": "" if commit_count >= 0 else "unknown",
+    }
+
+
+def _fetch_gitcode_com_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[str], timeout: int) -> Dict[str, Any]:
+    """获取 gitcode.com PR 的 commit 数量和行数变更。
+
+    GitCode.com API（与 gitee/atomgit 类似的 REST API）:
+    1. /pulls/{number}/commits - 获取 commit 列表
+    2. /pulls/{number}/files - 获取变更文件（每个文件有 additions/deletions）
+    """
+    base_url = "https://gitcode.com/api/v5/repos"
+
+    # 1. 获取 commits
+    commits_url = f"{base_url}/{owner}/{repo}/pulls/{pr_num}/commits"
+    status, body = _make_request(commits_url, token, timeout, use_private_token=True)
+
+    if status != 200:
+        return {
+            "commit_count": -1,
+            "lines_changed": -1,
+            "commits": "",
+            "error": f"commits API failed: status={status}, body={body[:200]}",
+        }
+
+    try:
+        commits_data = json.loads(body)
+        commit_count = len(commits_data) if isinstance(commits_data, list) else 0
+
+        # 提取 commit SHA 和 title，格式：commit_id commit_title（每行一个）
+        commits = ""
+        if isinstance(commits_data, list):
+            lines = []
+            for c in commits_data:
+                sha = c.get("sha", "")
+                title = ""
+                if "commit" in c and isinstance(c["commit"], dict):
+                    title = c["commit"].get("message", "")
+                # 只保留第一行作为 title
+                title = title.split("\n")[0] if title else ""
+                lines.append(f"{sha} {title}")
+            commits = "\n".join(lines)
+    except json.JSONDecodeError:
+        return {
+            "commit_count": -1,
+            "lines_changed": -1,
+            "commits": "",
+            "error": f"commits JSON parse error: {body[:200]}",
+        }
+
+    # 2. 获取 files（用于统计 additions/deletions）
+    files_url = f"{base_url}/{owner}/{repo}/pulls/{pr_num}/files"
+    status, body = _make_request(files_url, token, timeout, use_private_token=True)
+
+    lines_changed = 0
+    if status == 200:
+        try:
+            files_data = json.loads(body)
+            if isinstance(files_data, list):
+                for f in files_data:
+                    # gitcode.com 返回的可能是字符串，需要转换
+                    additions = int(f.get("additions", 0) or 0)
+                    deletions = int(f.get("deletions", 0) or 0)
+                    lines_changed += (additions + deletions)
+        except json.JSONDecodeError:
+            pass
+    else:
+        logging.debug(f"gitcode.com files API failed: status={status}")
+
+    return {
+        "commit_count": commit_count,
+        "lines_changed": lines_changed,
+        "commits": commits,
+        "error": "" if commit_count >= 0 else "unknown",
+    }
+
+
+def _fetch_atomgit_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[str], timeout: int) -> Dict[str, Any]:
+    """获取 atomgit PR 的 commit 数量和行数变更。
+
+    AtomGit API（与 gitee 类似的 REST API）:
+    1. /pulls/{number}/commits - 获取 commit 列表
+    2. /pulls/{number}/files - 获取变更文件（每个文件有 additions/deletions）
+    """
+    base_url = "https://atomgit.com/api/v5/repos"
+
+    # 1. 获取 commits
+    commits_url = f"{base_url}/{owner}/{repo}/pulls/{pr_num}/commits"
+    status, body = _make_request(commits_url, token, timeout, use_private_token=True)
+
+    if status != 200:
+        return {
+            "commit_count": -1,
+            "lines_changed": -1,
+            "commits": "",
+            "error": f"commits API failed: status={status}, body={body[:200]}",
+        }
+
+    try:
+        commits_data = json.loads(body)
+        commit_count = len(commits_data) if isinstance(commits_data, list) else 0
+
+        # 提取 commit SHA 和 title，格式：commit_id commit_title（每行一个）
+        commits = ""
+        if isinstance(commits_data, list):
+            lines = []
+            for c in commits_data:
+                sha = c.get("sha", "")
+                title = ""
+                if "commit" in c and isinstance(c["commit"], dict):
+                    title = c["commit"].get("message", "")
+                # 只保留第一行作为 title
+                title = title.split("\n")[0] if title else ""
+                lines.append(f"{sha} {title}")
+            commits = "\n".join(lines)
+    except json.JSONDecodeError:
+        return {
+            "commit_count": -1,
+            "lines_changed": -1,
+            "commits": "",
+            "error": f"commits JSON parse error: {body[:200]}",
+        }
+
+    # 2. 获取 files（用于统计 additions/deletions）
+    files_url = f"{base_url}/{owner}/{repo}/pulls/{pr_num}/files"
+    status, body = _make_request(files_url, token, timeout, use_private_token=True)
+
+    lines_changed = 0
+    if status == 200:
+        try:
+            files_data = json.loads(body)
+            if isinstance(files_data, list):
+                for f in files_data:
+                    # atomgit 返回的可能是字符串，需要转换
+                    additions = int(f.get("additions", 0) or 0)
+                    deletions = int(f.get("deletions", 0) or 0)
+                    lines_changed += (additions + deletions)
+        except json.JSONDecodeError:
+            pass
+    else:
+        logging.debug(f"atomgit files API failed: status={status}")
+
+    return {
+        "commit_count": commit_count,
+        "lines_changed": lines_changed,
+        "commits": commits,
         "error": "" if commit_count >= 0 else "unknown",
     }
 
@@ -292,26 +570,30 @@ def _fetch_pr_stats(url: str, timeout: int = 15) -> Dict[str, Any]:
             "platform": "unknown",
             "commit_count": -1,
             "lines_changed": -1,
+            "commits": "",
             "error": "unsupported platform",
         }
 
     token = None
     if platform == "gitee":
         token = os.environ.get("GITEE_TOKEN")
-    elif platform == "gitcode":
+    elif platform in ("gitcode", "gitcode_com", "atomgit"):
         token = os.environ.get("GITCODE_TOKEN")
 
     parsed = None
     if platform == "gitee":
         parsed = _parse_gitee_pr_url(url)
-    elif platform == "gitcode":
+    elif platform in ("gitcode", "gitcode_com"):
         parsed = _parse_gitcode_pr_url(url)
+    elif platform == "atomgit":
+        parsed = _parse_atomgit_pr_url(url)
 
     if not parsed:
         return {
             "platform": platform,
             "commit_count": -1,
             "lines_changed": -1,
+            "commits": "",
             "error": "failed to parse PR URL",
         }
 
@@ -319,16 +601,23 @@ def _fetch_pr_stats(url: str, timeout: int = 15) -> Dict[str, Any]:
     logging.info(f"Fetching {platform} PR: {owner}/{repo}#{pr_num}")
 
     if platform == "gitee":
-        return _fetch_gitee_pr_stats(owner, repo, pr_num, token, timeout)
+        result = _fetch_gitee_pr_stats(owner, repo, pr_num, token, timeout)
     elif platform == "gitcode":
-        return _fetch_gitcode_pr_stats(owner, repo, pr_num, token, timeout)
+        result = _fetch_gitcode_pr_stats(owner, repo, pr_num, token, timeout)
+    elif platform == "gitcode_com":
+        result = _fetch_gitcode_com_pr_stats(owner, repo, pr_num, token, timeout)
+    elif platform == "atomgit":
+        result = _fetch_atomgit_pr_stats(owner, repo, pr_num, token, timeout)
+    else:
+        result = {
+            "commit_count": -1,
+            "lines_changed": -1,
+            "commits": "",
+            "error": "unknown platform",
+        }
 
-    return {
-        "platform": platform,
-        "commit_count": -1,
-        "lines_changed": -1,
-        "error": "unknown platform",
-    }
+    result["platform"] = platform
+    return result
 
 
 def _read_input_file(path: Path) -> List[str]:
@@ -387,7 +676,11 @@ def cmd_stats(args: argparse.Namespace) -> int:
             commit_count = r.get("commit_count", -1)
             lines_changed = r.get("lines_changed", -1)
             error = r.get("error", "")
+            commits = r.get("commits", "")
             f.write(f"{url}|{platform}|{commit_count}|{lines_changed}|{error}\n")
+            # 在 PR 行后输出 commit 列表
+            if commits:
+                f.write(f"{commits}\n")
 
     logging.info(f"结果已保存到 {out}")
     return 0
