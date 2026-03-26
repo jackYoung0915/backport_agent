@@ -213,8 +213,8 @@ def _fetch_gitee_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[st
     """
     base_url = "https://gitee.com/api/v5/repos"
 
-    # 1. 获取 commits
-    commits_url = f"{base_url}/{owner}/{repo}/pulls/{pr_num}/commits"
+    # 1. 获取 commits（添加 per_page 参数获取所有 commits，Gitee 默认最多 20 条）
+    commits_url = f"{base_url}/{owner}/{repo}/pulls/{pr_num}/commits?per_page=100"
     status, body = _make_request(commits_url, token, timeout)
 
     if status != 200:
@@ -290,8 +290,8 @@ def _fetch_gitcode_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[
     proj_id = urllib.parse.quote(f"{owner}/{repo}", safe="")
     base_url = "https://gitcode.net/api/v4"
 
-    # 1. 获取 commits
-    commits_url = f"{base_url}/projects/{proj_id}/merge_requests/{pr_num}/commits"
+    # 1. 获取 commits（添加 per_page 参数获取所有 commits，GitLab 默认最多 20 条）
+    commits_url = f"{base_url}/projects/{proj_id}/merge_requests/{pr_num}/commits?per_page=100"
     status, body = _make_request(commits_url, token, timeout)
 
     if status != 200:
@@ -326,55 +326,6 @@ def _fetch_gitcode_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[
             "commits": "",
             "error": f"commits JSON parse error: {body[:200]}",
         }
-    """获取 gitcode (GitLab) PR 的 commit 数量和行数变更。
-
-    GitLab/GitCode API:
-    1. /projects/{id}/merge_requests/{iid}/commits - 获取 commit 列表
-    2. /projects/{id}/merge_requests/{iid}/changes - 获取变更详情（包含 additions/deletions）
-    """
-    # 需要先获取 project id，因为 API 使用 path-encoded project ID
-    # owner/repo 需要 URL encode
-    proj_id = urllib.parse.quote(f"{owner}/{repo}", safe="")
-    base_url = "https://gitcode.net/api/v4"
-
-    # 1. 获取 commits
-    commits_url = f"{base_url}/projects/{proj_id}/merge_requests/{pr_num}/commits"
-    # gitcode 需要 private-token
-    status, body = _make_request(commits_url, token, timeout, use_private_token=True)
-
-    if status != 200:
-        return {
-            "commit_count": -1,
-            "lines_changed": -1,
-            "commits": "",
-            "error": f"commits API failed: status={status}, body={body[:200]}",
-        }
-
-    try:
-        commits_data = json.loads(body)
-        commit_count = len(commits_data) if isinstance(commits_data, list) else 0
-
-        # 提取 commit SHA 和 title，格式：commit_id commit_title（每行一个）
-        commits = ""
-        if isinstance(commits_data, list):
-            lines = []
-            for c in commits_data:
-                # GitLab/GitCode 使用 id 字段作为 SHA
-                commit_id = c.get("id", "")
-                # title 或 message 字段作为标题
-                title = c.get("title", "") or c.get("message", "")
-                # 只保留第一行作为 title
-                title = title.split("\n")[0] if title else ""
-                lines.append(f"{commit_id} {title}")
-            commits = "\n".join(lines)
-    except json.JSONDecodeError:
-        return {
-            "commit_count": -1,
-            "lines_changed": -1,
-            "commits": "",
-            "error": f"commits JSON parse error: {body[:200]}",
-        }
-
     # 2. 获取 changes（包含 additions/deletions）
     changes_url = f"{base_url}/projects/{proj_id}/merge_requests/{pr_num}/changes"
     status, body = _make_request(changes_url, token, timeout, use_private_token=True)
@@ -425,8 +376,8 @@ def _fetch_gitcode_com_pr_stats(owner: str, repo: str, pr_num: str, token: Optio
     """
     base_url = "https://gitcode.com/api/v5/repos"
 
-    # 1. 获取 commits
-    commits_url = f"{base_url}/{owner}/{repo}/pulls/{pr_num}/commits"
+    # 1. 获取 commits（添加 per_page 参数获取所有 commits，默认最多 20 条）
+    commits_url = f"{base_url}/{owner}/{repo}/pulls/{pr_num}/commits?per_page=100"
     status, body = _make_request(commits_url, token, timeout, use_private_token=True)
 
     if status != 200:
@@ -498,8 +449,8 @@ def _fetch_atomgit_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[
     """
     base_url = "https://atomgit.com/api/v5/repos"
 
-    # 1. 获取 commits
-    commits_url = f"{base_url}/{owner}/{repo}/pulls/{pr_num}/commits"
+    # 1. 获取 commits（添加 per_page 参数获取所有 commits，默认最多 20 条）
+    commits_url = f"{base_url}/{owner}/{repo}/pulls/{pr_num}/commits?per_page=100"
     status, body = _make_request(commits_url, token, timeout, use_private_token=True)
 
     if status != 200:
