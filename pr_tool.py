@@ -21,6 +21,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
+PER_PAGE = 100
+
+
 def _decode_output(data: Optional[bytes]) -> str:
     """解码 HTTP 响应。"""
     return (data or b"").decode("utf-8", errors="replace").strip()
@@ -204,6 +207,41 @@ def _detect_platform(url: str) -> Optional[str]:
     return None
 
 
+def _fetch_all_pages(
+    base_url: str,
+    token: Optional[str],
+    timeout: int,
+    use_private_token: bool = False,
+    per_page: int = PER_PAGE,
+) -> Tuple[bool, List[Any], str]:
+    """分页获取所有数据，返回 (success, all_items, error_msg)。"""
+    all_items: List[Any] = []
+    page = 1
+    while True:
+        sep = "&" if "?" in base_url else "?"
+        url = f"{base_url}{sep}per_page={per_page}&page={page}"
+        status, body = _make_request(url, token, timeout, use_private_token=use_private_token)
+        if status != 200:
+            if page == 1:
+                return (False, [], f"API failed: status={status}, body={body[:200]}")
+            break
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            if page == 1:
+                return (False, [], f"JSON parse error: {body[:200]}")
+            break
+        if not isinstance(data, list):
+            if page == 1:
+                return (False, [], f"unexpected response type: {type(data).__name__}")
+            break
+        all_items.extend(data)
+        if len(data) != per_page:
+            break
+        page += 1
+    return (True, all_items, "")
+
+
 def _fetch_gitee_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[str], timeout: int) -> Dict[str, Any]:
     """获取 gitee PR 的 commit 数量和行数变更。
 
@@ -211,70 +249,41 @@ def _fetch_gitee_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[st
     1. /pulls/{number}/commits - 获取 commit 列表
     2. /pulls/{number}/files - 获取变更文件（每个文件有 additions/deletions）
     """
-    base_url = "https://gitee.com/api/v5/repos"
+    api_base = "https://gitee.com/api/v5/repos"
 
-    # 1. 获取 commits（添加 per_page 参数获取所有 commits，Gitee 默认最多 20 条）
-    commits_url = f"{base_url}/{owner}/{repo}/pulls/{pr_num}/commits?per_page=100"
-    status, body = _make_request(commits_url, token, timeout)
+    commits_url = f"{api_base}/{owner}/{repo}/pulls/{pr_num}/commits"
+    ok, commits_data, err = _fetch_all_pages(commits_url, token, timeout)
+    if not ok:
+        return {"commit_count": -1, "lines_changed": -1, "commits": "", "error": f"commits {err}"}
 
-    if status != 200:
-        return {
-            "commit_count": -1,
-            "lines_changed": -1,
-            "commits": "",
-            "error": f"commits API failed: status={status}, body={body[:200]}",
-        }
+    commit_count = len(commits_data)
+    commit_lines = []
+    for c in commits_data:
+        sha = c.get("sha", "")
+        title = ""
+        if "commit" in c and isinstance(c["commit"], dict):
+            title = c["commit"].get("message", "")
+        title = title.split("\n")[0] if title else ""
+        commit_lines.append(f"{sha} {title}")
+    commits = "\n".join(commit_lines)
 
-    try:
-        commits_data = json.loads(body)
-        commit_count = len(commits_data) if isinstance(commits_data, list) else 0
-
-        # 提取 commit SHA 和 title，格式：commit_id commit_title（每行一个）
-        commits = ""
-        if isinstance(commits_data, list):
-            lines = []
-            for c in commits_data:
-                sha = c.get("sha", "")
-                title = ""
-                if "commit" in c and isinstance(c["commit"], dict):
-                    title = c["commit"].get("message", "")
-                # 只保留第一行作为 title
-                title = title.split("\n")[0] if title else ""
-                lines.append(f"{sha} {title}")
-            commits = "\n".join(lines)
-    except json.JSONDecodeError:
-        return {
-            "commit_count": -1,
-            "lines_changed": -1,
-            "commits": "",
-            "error": f"commits JSON parse error: {body[:200]}",
-        }
-
-    # 2. 获取 files（用于统计 additions/deletions）
-    files_url = f"{base_url}/{owner}/{repo}/pulls/{pr_num}/files"
-    status, body = _make_request(files_url, token, timeout)
+    files_url = f"{api_base}/{owner}/{repo}/pulls/{pr_num}/files"
+    ok_f, files_data, _ = _fetch_all_pages(files_url, token, timeout)
 
     lines_changed = 0
-    if status == 200:
-        try:
-            files_data = json.loads(body)
-            if isinstance(files_data, list):
-                for f in files_data:
-                    # gitee 返回的可能是字符串，需要转换
-                    additions = int(f.get("additions", 0) or 0)
-                    deletions = int(f.get("deletions", 0) or 0)
-                    lines_changed += (additions + deletions)
-        except json.JSONDecodeError:
-            pass  # files 解析失败不影响主结果
+    if ok_f:
+        for f in files_data:
+            additions = int(f.get("additions", 0) or 0)
+            deletions = int(f.get("deletions", 0) or 0)
+            lines_changed += (additions + deletions)
     else:
-        # 如果 files API 失败，记录但继续
-        logging.debug(f"gitee files API failed: status={status}")
+        logging.debug("gitee files API failed")
 
     return {
         "commit_count": commit_count,
         "lines_changed": lines_changed,
         "commits": commits,
-        "error": "" if commit_count >= 0 else "unknown",
+        "error": "",
     }
 
 
@@ -285,49 +294,23 @@ def _fetch_gitcode_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[
     1. /projects/{id}/merge_requests/{iid}/commits - 获取 commit 列表
     2. /projects/{id}/merge_requests/{iid}/changes - 获取变更详情（包含 additions/deletions）
     """
-    # 需要先获取 project id，因为 API 使用 path-encoded project ID
-    # owner/repo 需要 URL encode
     proj_id = urllib.parse.quote(f"{owner}/{repo}", safe="")
-    base_url = "https://gitcode.net/api/v4"
+    api_base = "https://gitcode.net/api/v4"
 
-    # 1. 获取 commits（添加 per_page 参数获取所有 commits，GitLab 默认最多 20 条）
-    commits_url = f"{base_url}/projects/{proj_id}/merge_requests/{pr_num}/commits?per_page=100"
-    status, body = _make_request(commits_url, token, timeout)
+    commits_url = f"{api_base}/projects/{proj_id}/merge_requests/{pr_num}/commits"
+    ok, commits_data, err = _fetch_all_pages(commits_url, token, timeout)
+    if not ok:
+        return {"commit_count": -1, "lines_changed": -1, "commits": "", "error": f"commits {err}"}
 
-    if status != 200:
-        return {
-            "commit_count": -1,
-            "lines_changed": -1,
-            "commits": "",
-            "error": f"commits API failed: status={status}, body={body[:200]}",
-        }
-
-    try:
-        commits_data = json.loads(body)
-        commit_count = len(commits_data) if isinstance(commits_data, list) else 0
-
-        # 提取 commit SHA 和 title，格式：commit_id commit_title（每行一个）
-        commits = ""
-        if isinstance(commits_data, list):
-            lines = []
-            for c in commits_data:
-                # GitLab/GitCode 使用 id 字段作为 SHA
-                commit_id = c.get("id", "")
-                # title 或 message 字段作为标题
-                title = c.get("title", "") or c.get("message", "")
-                # 只保留第一行作为 title
-                title = title.split("\n")[0] if title else ""
-                lines.append(f"{commit_id} {title}")
-            commits = "\n".join(lines)
-    except json.JSONDecodeError:
-        return {
-            "commit_count": -1,
-            "lines_changed": -1,
-            "commits": "",
-            "error": f"commits JSON parse error: {body[:200]}",
-        }
-    # 2. 获取 changes（包含 additions/deletions）
-    changes_url = f"{base_url}/projects/{proj_id}/merge_requests/{pr_num}/changes"
+    commit_count = len(commits_data)
+    commit_lines = []
+    for c in commits_data:
+        commit_id = c.get("id", "")
+        title = c.get("title", "") or c.get("message", "")
+        title = title.split("\n")[0] if title else ""
+        commit_lines.append(f"{commit_id} {title}")
+    commits = "\n".join(commit_lines)
+    changes_url = f"{api_base}/projects/{proj_id}/merge_requests/{pr_num}/changes"
     status, body = _make_request(changes_url, token, timeout, use_private_token=True)
 
     lines_changed = 0
@@ -374,69 +357,41 @@ def _fetch_gitcode_com_pr_stats(owner: str, repo: str, pr_num: str, token: Optio
     1. /pulls/{number}/commits - 获取 commit 列表
     2. /pulls/{number}/files - 获取变更文件（每个文件有 additions/deletions）
     """
-    base_url = "https://gitcode.com/api/v5/repos"
+    api_base = "https://gitcode.com/api/v5/repos"
 
-    # 1. 获取 commits（添加 per_page 参数获取所有 commits，默认最多 20 条）
-    commits_url = f"{base_url}/{owner}/{repo}/pulls/{pr_num}/commits?per_page=100"
-    status, body = _make_request(commits_url, token, timeout, use_private_token=True)
+    commits_url = f"{api_base}/{owner}/{repo}/pulls/{pr_num}/commits"
+    ok, commits_data, err = _fetch_all_pages(commits_url, token, timeout, use_private_token=True)
+    if not ok:
+        return {"commit_count": -1, "lines_changed": -1, "commits": "", "error": f"commits {err}"}
 
-    if status != 200:
-        return {
-            "commit_count": -1,
-            "lines_changed": -1,
-            "commits": "",
-            "error": f"commits API failed: status={status}, body={body[:200]}",
-        }
+    commit_count = len(commits_data)
+    commit_lines = []
+    for c in commits_data:
+        sha = c.get("sha", "")
+        title = ""
+        if "commit" in c and isinstance(c["commit"], dict):
+            title = c["commit"].get("message", "")
+        title = title.split("\n")[0] if title else ""
+        commit_lines.append(f"{sha} {title}")
+    commits = "\n".join(commit_lines)
 
-    try:
-        commits_data = json.loads(body)
-        commit_count = len(commits_data) if isinstance(commits_data, list) else 0
-
-        # 提取 commit SHA 和 title，格式：commit_id commit_title（每行一个）
-        commits = ""
-        if isinstance(commits_data, list):
-            lines = []
-            for c in commits_data:
-                sha = c.get("sha", "")
-                title = ""
-                if "commit" in c and isinstance(c["commit"], dict):
-                    title = c["commit"].get("message", "")
-                # 只保留第一行作为 title
-                title = title.split("\n")[0] if title else ""
-                lines.append(f"{sha} {title}")
-            commits = "\n".join(lines)
-    except json.JSONDecodeError:
-        return {
-            "commit_count": -1,
-            "lines_changed": -1,
-            "commits": "",
-            "error": f"commits JSON parse error: {body[:200]}",
-        }
-
-    # 2. 获取 files（用于统计 additions/deletions）
-    files_url = f"{base_url}/{owner}/{repo}/pulls/{pr_num}/files"
-    status, body = _make_request(files_url, token, timeout, use_private_token=True)
+    files_url = f"{api_base}/{owner}/{repo}/pulls/{pr_num}/files"
+    ok_f, files_data, _ = _fetch_all_pages(files_url, token, timeout, use_private_token=True)
 
     lines_changed = 0
-    if status == 200:
-        try:
-            files_data = json.loads(body)
-            if isinstance(files_data, list):
-                for f in files_data:
-                    # gitcode.com 返回的可能是字符串，需要转换
-                    additions = int(f.get("additions", 0) or 0)
-                    deletions = int(f.get("deletions", 0) or 0)
-                    lines_changed += (additions + deletions)
-        except json.JSONDecodeError:
-            pass
+    if ok_f:
+        for f in files_data:
+            additions = int(f.get("additions", 0) or 0)
+            deletions = int(f.get("deletions", 0) or 0)
+            lines_changed += (additions + deletions)
     else:
-        logging.debug(f"gitcode.com files API failed: status={status}")
+        logging.debug("gitcode.com files API failed")
 
     return {
         "commit_count": commit_count,
         "lines_changed": lines_changed,
         "commits": commits,
-        "error": "" if commit_count >= 0 else "unknown",
+        "error": "",
     }
 
 
@@ -447,69 +402,41 @@ def _fetch_atomgit_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[
     1. /pulls/{number}/commits - 获取 commit 列表
     2. /pulls/{number}/files - 获取变更文件（每个文件有 additions/deletions）
     """
-    base_url = "https://atomgit.com/api/v5/repos"
+    api_base = "https://atomgit.com/api/v5/repos"
 
-    # 1. 获取 commits（添加 per_page 参数获取所有 commits，默认最多 20 条）
-    commits_url = f"{base_url}/{owner}/{repo}/pulls/{pr_num}/commits?per_page=100"
-    status, body = _make_request(commits_url, token, timeout, use_private_token=True)
+    commits_url = f"{api_base}/{owner}/{repo}/pulls/{pr_num}/commits"
+    ok, commits_data, err = _fetch_all_pages(commits_url, token, timeout, use_private_token=True)
+    if not ok:
+        return {"commit_count": -1, "lines_changed": -1, "commits": "", "error": f"commits {err}"}
 
-    if status != 200:
-        return {
-            "commit_count": -1,
-            "lines_changed": -1,
-            "commits": "",
-            "error": f"commits API failed: status={status}, body={body[:200]}",
-        }
+    commit_count = len(commits_data)
+    commit_lines = []
+    for c in commits_data:
+        sha = c.get("sha", "")
+        title = ""
+        if "commit" in c and isinstance(c["commit"], dict):
+            title = c["commit"].get("message", "")
+        title = title.split("\n")[0] if title else ""
+        commit_lines.append(f"{sha} {title}")
+    commits = "\n".join(commit_lines)
 
-    try:
-        commits_data = json.loads(body)
-        commit_count = len(commits_data) if isinstance(commits_data, list) else 0
-
-        # 提取 commit SHA 和 title，格式：commit_id commit_title（每行一个）
-        commits = ""
-        if isinstance(commits_data, list):
-            lines = []
-            for c in commits_data:
-                sha = c.get("sha", "")
-                title = ""
-                if "commit" in c and isinstance(c["commit"], dict):
-                    title = c["commit"].get("message", "")
-                # 只保留第一行作为 title
-                title = title.split("\n")[0] if title else ""
-                lines.append(f"{sha} {title}")
-            commits = "\n".join(lines)
-    except json.JSONDecodeError:
-        return {
-            "commit_count": -1,
-            "lines_changed": -1,
-            "commits": "",
-            "error": f"commits JSON parse error: {body[:200]}",
-        }
-
-    # 2. 获取 files（用于统计 additions/deletions）
-    files_url = f"{base_url}/{owner}/{repo}/pulls/{pr_num}/files"
-    status, body = _make_request(files_url, token, timeout, use_private_token=True)
+    files_url = f"{api_base}/{owner}/{repo}/pulls/{pr_num}/files"
+    ok_f, files_data, _ = _fetch_all_pages(files_url, token, timeout, use_private_token=True)
 
     lines_changed = 0
-    if status == 200:
-        try:
-            files_data = json.loads(body)
-            if isinstance(files_data, list):
-                for f in files_data:
-                    # atomgit 返回的可能是字符串，需要转换
-                    additions = int(f.get("additions", 0) or 0)
-                    deletions = int(f.get("deletions", 0) or 0)
-                    lines_changed += (additions + deletions)
-        except json.JSONDecodeError:
-            pass
+    if ok_f:
+        for f in files_data:
+            additions = int(f.get("additions", 0) or 0)
+            deletions = int(f.get("deletions", 0) or 0)
+            lines_changed += (additions + deletions)
     else:
-        logging.debug(f"atomgit files API failed: status={status}")
+        logging.debug("atomgit files API failed")
 
     return {
         "commit_count": commit_count,
         "lines_changed": lines_changed,
         "commits": commits,
-        "error": "" if commit_count >= 0 else "unknown",
+        "error": "",
     }
 
 
