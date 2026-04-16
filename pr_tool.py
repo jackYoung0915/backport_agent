@@ -265,6 +265,7 @@ def _fetch_gitee_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[st
             title = c["commit"].get("message", "")
         title = title.split("\n")[0] if title else ""
         commit_lines.append(f"{sha} {title}")
+    commit_lines.reverse()  # API 多为新→旧，输出改为旧→新
     commits = "\n".join(commit_lines)
 
     files_url = f"{api_base}/{owner}/{repo}/pulls/{pr_num}/files"
@@ -309,6 +310,7 @@ def _fetch_gitcode_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[
         title = c.get("title", "") or c.get("message", "")
         title = title.split("\n")[0] if title else ""
         commit_lines.append(f"{commit_id} {title}")
+    commit_lines.reverse()  # API 多为新→旧，输出改为旧→新
     commits = "\n".join(commit_lines)
     changes_url = f"{api_base}/projects/{proj_id}/merge_requests/{pr_num}/changes"
     status, body = _make_request(changes_url, token, timeout, use_private_token=True)
@@ -373,6 +375,7 @@ def _fetch_gitcode_com_pr_stats(owner: str, repo: str, pr_num: str, token: Optio
             title = c["commit"].get("message", "")
         title = title.split("\n")[0] if title else ""
         commit_lines.append(f"{sha} {title}")
+    commit_lines.reverse()  # API 多为新→旧，输出改为旧→新
     commits = "\n".join(commit_lines)
 
     files_url = f"{api_base}/{owner}/{repo}/pulls/{pr_num}/files"
@@ -418,6 +421,7 @@ def _fetch_atomgit_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[
             title = c["commit"].get("message", "")
         title = title.split("\n")[0] if title else ""
         commit_lines.append(f"{sha} {title}")
+    commit_lines.reverse()  # API 多为新→旧，输出改为旧→新
     commits = "\n".join(commit_lines)
 
     files_url = f"{api_base}/{owner}/{repo}/pulls/{pr_num}/files"
