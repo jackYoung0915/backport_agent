@@ -15,6 +15,7 @@
 import argparse
 import csv
 import os
+import platform
 import sys
 import unicodedata
 from pathlib import Path
@@ -35,6 +36,40 @@ DEFAULT_ROOTS = (
     "/vendor",
     "/system",
 )
+
+OS_FAMILY_CHOICES = ("auto", "generic", "debian", "rpm")
+
+DEBIAN_OS_IDS = ("debian", "ubuntu", "linuxmint")
+RPM_OS_IDS = (
+    "almalinux",
+    "centos",
+    "fedora",
+    "openeuler",
+    "rhel",
+    "rocky",
+)
+RPM_OS_LIKE_IDS = ("rhel", "fedora")
+
+RPM_EXTRA_ROOTS = (
+    "/usr/libexec",
+    "/usr/local/lib64",
+    "/lib/modules",
+    "/usr/lib/modules",
+)
+
+DEBIAN_MULTIARCH_TRIPLETS = {
+    "aarch64": "aarch64-linux-gnu",
+    "arm64": "aarch64-linux-gnu",
+    "armv6l": "arm-linux-gnueabihf",
+    "armv7l": "arm-linux-gnueabihf",
+    "i386": "i386-linux-gnu",
+    "i486": "i386-linux-gnu",
+    "i586": "i386-linux-gnu",
+    "i686": "i386-linux-gnu",
+    "ppc64le": "powerpc64le-linux-gnu",
+    "s390x": "s390x-linux-gnu",
+    "x86_64": "x86_64-linux-gnu",
+}
 
 
 def _display_width(text: str) -> int:
@@ -66,6 +101,86 @@ def _read_input_names(input_file: Path) -> List[str]:
             if name:
                 names.append(name)
     return names
+
+
+def _read_os_release(os_release_file: Path = Path("/etc/os-release")) -> Dict[str, str]:
+    """读取 os-release 信息。"""
+    info: Dict[str, str] = {}
+    try:
+        with os_release_file.open("r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                info[key.strip()] = value.strip().strip("\"'")
+    except OSError:
+        return {}
+    return info
+
+
+def detect_os_family(os_release_file: Path = Path("/etc/os-release")) -> str:
+    """识别当前系统目录布局族。"""
+    info = _read_os_release(os_release_file)
+    os_id = info.get("ID", "").lower()
+    os_like_ids = set(info.get("ID_LIKE", "").lower().replace(",", " ").split())
+
+    if os_id in DEBIAN_OS_IDS or os_like_ids.intersection(DEBIAN_OS_IDS):
+        return "debian"
+    if (
+        os_id in RPM_OS_IDS
+        or os_like_ids.intersection(RPM_OS_IDS)
+        or os_like_ids.intersection(RPM_OS_LIKE_IDS)
+    ):
+        return "rpm"
+    return "generic"
+
+
+def _debian_multiarch_triplet() -> Optional[str]:
+    """根据机器架构推导 Debian multiarch triplet。"""
+    machine = platform.machine().lower()
+    return DEBIAN_MULTIARCH_TRIPLETS.get(machine)
+
+
+def _debian_multiarch_roots() -> Tuple[str, ...]:
+    """构造 Debian multiarch 常见库目录。"""
+    triplet = _debian_multiarch_triplet()
+    if not triplet:
+        return ()
+    return (
+        "/lib/{0}".format(triplet),
+        "/usr/lib/{0}".format(triplet),
+        "/usr/local/lib/{0}".format(triplet),
+    )
+
+
+def _dedupe_roots(raw_roots: Sequence[str]) -> Tuple[str, ...]:
+    """按真实路径去重 root 字符串，并保留首次出现形式。"""
+    roots: List[str] = []
+    seen: Set[str] = set()
+    for raw in raw_roots:
+        root = raw.strip()
+        if not root:
+            continue
+        real_root = os.path.realpath(os.path.abspath(root))
+        if real_root in seen:
+            continue
+        seen.add(real_root)
+        roots.append(root)
+    return tuple(roots)
+
+
+def get_default_roots(os_family: str = "auto") -> Tuple[str, ...]:
+    """按系统族返回默认搜索根目录。"""
+    if os_family not in OS_FAMILY_CHOICES:
+        raise ValueError("unsupported os family: {0}".format(os_family))
+
+    resolved_family = detect_os_family() if os_family == "auto" else os_family
+    if resolved_family == "debian":
+        return _dedupe_roots(DEFAULT_ROOTS + _debian_multiarch_roots())
+    if resolved_family == "rpm":
+        return _dedupe_roots(DEFAULT_ROOTS + RPM_EXTRA_ROOTS)
+    return _dedupe_roots(DEFAULT_ROOTS)
 
 
 def _resolve_roots(raw_roots: Sequence[str]) -> List[Path]:
@@ -199,9 +314,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--roots",
         nargs="+",
-        default=list(DEFAULT_ROOTS),
+        default=None,
         metavar="PATH",
-        help="搜索根目录列表（默认扫描常见系统目录）",
+        help="搜索根目录列表（指定后不使用自动系统目录）",
+    )
+    parser.add_argument(
+        "--os-family",
+        choices=OS_FAMILY_CHOICES,
+        default="auto",
+        help="默认搜索目录的系统族（默认 auto: 自动识别 debian/rpm/generic）",
     )
     return parser
 
@@ -228,7 +349,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("错误: 输入文件中没有可检查的文件名", file=sys.stderr)
         return 1
 
-    roots = _resolve_roots(args.roots)
+    raw_roots = (
+        args.roots
+        if args.roots is not None
+        else get_default_roots(args.os_family)
+    )
+    roots = _resolve_roots(raw_roots)
     index, warnings = _walk_and_index(roots)
     for warning in warnings:
         print(warning, file=sys.stderr)
