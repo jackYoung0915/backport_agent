@@ -1,0 +1,21 @@
+file_check_tool.py 考虑兼容debian系OS和CentOS系OS
+
+---
+
+把openEuler也加上
+
+---
+
+openEuler系和RHEL系能否合并成一组
+
+---
+
+Implement the plan.
+
+---
+
+AGENTS.md 更新该文件
+
+---
+
+Implement the plan.
