@@ -1,0 +1,5 @@
+帮我新增一个excel_tool.py 处理excel表格，要求识别每个excel单元格的内容，如果单元格中有换行符，则把这一单元格所在的行，按照换行符前后的内容拆成两行
+
+---
+
+Implement the plan.
