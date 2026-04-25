@@ -57,6 +57,9 @@ RPM_EXTRA_ROOTS = (
     "/usr/lib/modules",
 )
 
+KERNEL_SOURCE_SUFFIXES = (".h", ".c")
+KERNEL_SRC_ROOT = Path("/usr/src")
+
 DEBIAN_MULTIARCH_TRIPLETS = {
     "aarch64": "aarch64-linux-gnu",
     "arm64": "aarch64-linux-gnu",
@@ -101,6 +104,16 @@ def _read_input_names(input_file: Path) -> List[str]:
             if name:
                 names.append(name)
     return names
+
+
+def _is_kernel_source_name(name: str) -> bool:
+    """判断输入名是否为内核源码/头文件名。"""
+    return name.lower().endswith(KERNEL_SOURCE_SUFFIXES)
+
+
+def _has_kernel_source_names(names: Sequence[str]) -> bool:
+    """判断输入列表是否包含 .h 或 .c 文件。"""
+    return any(_is_kernel_source_name(name) for name in names)
 
 
 def _read_os_release(os_release_file: Path = Path("/etc/os-release")) -> Dict[str, str]:
@@ -154,6 +167,26 @@ def _debian_multiarch_roots() -> Tuple[str, ...]:
     )
 
 
+def _existing_glob_dirs(root: Path, pattern: str) -> Tuple[str, ...]:
+    """展开 root 下匹配 pattern 的现有目录。"""
+    if not root.exists() or not root.is_dir():
+        return ()
+    return tuple(str(path) for path in sorted(root.glob(pattern)) if path.is_dir())
+
+
+def _kernel_devel_roots() -> Tuple[str, ...]:
+    """返回当前系统常见内核开发包目录。"""
+    release = platform.release()
+    roots = (
+        "/lib/modules/{0}/build".format(release),
+        "/lib/modules/{0}/source".format(release),
+    )
+    roots += _existing_glob_dirs(KERNEL_SRC_ROOT, "linux-headers-*")
+    roots += _existing_glob_dirs(KERNEL_SRC_ROOT / "kernels", "*")
+    roots += _existing_glob_dirs(KERNEL_SRC_ROOT, "linux-*")
+    return _dedupe_roots(roots)
+
+
 def _dedupe_roots(raw_roots: Sequence[str]) -> Tuple[str, ...]:
     """按真实路径去重 root 字符串，并保留首次出现形式。"""
     roots: List[str] = []
@@ -181,6 +214,14 @@ def get_default_roots(os_family: str = "auto") -> Tuple[str, ...]:
     if resolved_family == "rpm":
         return _dedupe_roots(DEFAULT_ROOTS + RPM_EXTRA_ROOTS)
     return _dedupe_roots(DEFAULT_ROOTS)
+
+
+def get_search_roots(names: Sequence[str], os_family: str = "auto") -> Tuple[str, ...]:
+    """根据输入文件名返回搜索根目录。"""
+    default_roots = get_default_roots(os_family)
+    if _has_kernel_source_names(names):
+        return _dedupe_roots(_kernel_devel_roots() + default_roots)
+    return default_roots
 
 
 def _resolve_roots(raw_roots: Sequence[str]) -> List[Path]:
@@ -225,7 +266,14 @@ def _walk_and_index(roots: Sequence[Path]) -> Tuple[Dict[str, List[str]], List[s
                 index.setdefault(filename, []).append(full_path)
 
     for filename, paths in index.items():
-        deduped = sorted(set(paths))
+        deduped: List[str] = []
+        seen: Set[str] = set()
+        for path in paths:
+            real_path = os.path.realpath(path)
+            if real_path in seen:
+                continue
+            seen.add(real_path)
+            deduped.append(path)
         index[filename] = deduped
 
     return index, warnings
@@ -352,7 +400,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     raw_roots = (
         args.roots
         if args.roots is not None
-        else get_default_roots(args.os_family)
+        else get_search_roots(names, args.os_family)
     )
     roots = _resolve_roots(raw_roots)
     index, warnings = _walk_and_index(roots)

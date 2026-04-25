@@ -22,7 +22,7 @@ from file_check_tool import (
     _count_summary,
     _resolve_roots,
     _walk_and_index,
-    get_default_roots,
+    get_search_roots,
 )
 from patch_tool import check_commits, cherry_pick_commits, sync_meta_commits
 from pr_tool import _fetch_pr_stats
@@ -159,13 +159,14 @@ def file_check(names: list[str], roots: Optional[list[str]] = None) -> str:
     Args:
         names: 待检查文件名列表，按 basename 精确匹配。
         roots: 搜索根目录列表；为空时使用 file_check_tool 自动识别的默认系统目录。
+               names 包含 .h/.c 时优先搜索内核开发包目录。
 
     Returns:
         JSON 对象，包含 total / found / not_found 统计、warnings 及 results 列表。
         results 每项含 文件名、状态、命中数量、命中路径。
     """
     clean_names = [name.strip() for name in names if name and name.strip()]
-    search_roots = get_default_roots() if roots is None else roots
+    search_roots = get_search_roots(clean_names) if roots is None else roots
     resolved_roots = _resolve_roots(search_roots)
     index, warnings = _walk_and_index(resolved_roots)
     rows = _build_rows(clean_names, index)
