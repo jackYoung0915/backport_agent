@@ -1,0 +1,61 @@
+{
+  "cli_version": "0.5.5",
+  "checkpoint_id": "0a6fe616b8d4",
+  "session_id": "019dc37d-464e-7770-8e8c-3375a2af27db",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-25T07:22:09.430704695Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "mcp_server.py"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.5",
+  "turn_id": "06b60bae15dd",
+  "token_usage": {
+    "input_tokens": 300241,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 263296,
+    "output_tokens": 11382,
+    "api_call_count": 22
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-25T07:22:09.424854862Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 8,
+    "total_committed": 0,
+    "total_lines_changed": 8,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 912,
+      "user_lines_removed": 8,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".codex/agents/entire-search.toml": 23,
+        ".codex/config.toml": 3,
+        ".codex/hooks.json": 40,
+        ".codex/skills/backport-patch-tools/SKILL.md": 38,
+        ".cursor/hooks.json": 40,
+        ".gitignore": 7,
+        "file_check_tool.py": 256,
+        "mcp_server.py": 76,
+        "test.txt": 1,
+        "test.txt.output": 428
+      },
+      "user_removed_per_file": {
+        "mcp_server.py": 8
+      }
+    }
+  ]
+}
