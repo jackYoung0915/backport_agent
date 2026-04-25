@@ -1,0 +1,5 @@
+file_check_tool.py 针对输入的.h .c 文件优先在内核开发包目录中寻找
+
+---
+
+Implement the plan.
