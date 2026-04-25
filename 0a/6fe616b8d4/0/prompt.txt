@@ -1,0 +1,5 @@
+mcp_server.py 更新该文件，并新增一个skill版本
+
+---
+
+Implement the plan.
