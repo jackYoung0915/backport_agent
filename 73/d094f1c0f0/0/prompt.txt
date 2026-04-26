@@ -1,0 +1,9 @@
+excel_tool.py 表格处理和生成表格可以是多线程并行处理吗
+
+---
+
+excel_tool.py 仅对Commit信息列分行，其他列忽略，空白处应该填充
+
+---
+
+Implement the plan.
