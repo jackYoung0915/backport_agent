@@ -1,0 +1,1 @@
+excel_tool.py export-commits子命令仅输出commit hash 和 commit title 中间用四个空格隔开，commit hash 保留12位

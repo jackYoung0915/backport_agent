@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.5",
+  "checkpoint_id": "1d02cb769cd9",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "AGENTS.md",
+    "excel_tool.py",
+    "mcp_server.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1d/02cb769cd9/0/metadata.json",
+      "transcript": "/1d/02cb769cd9/0/full.jsonl",
+      "content_hash": "/1d/02cb769cd9/0/content_hash.txt",
+      "prompt": "/1d/02cb769cd9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2042513,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1891072,
+    "output_tokens": 6609,
+    "api_call_count": 28
+  }
+}
