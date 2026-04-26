@@ -186,16 +186,19 @@ def file_check(names: list[str], roots: Optional[list[str]] = None) -> str:
 
 @mcp.tool()
 def excel_export_commits(input_file: str, output_file: Optional[str] = None) -> str:
-    """从 Excel 的 Commit信息 列导出 patch_tool.py 可读取的提交列表。
+    """从 Excel 的 Commit信息 列导出提交列表。
 
     Args:
         input_file: 输入 Excel 文件路径（.xlsx/.xlsm）。每个 worksheet 首行按
                     表头精确匹配 Commit信息 列。
-        output_file: 可选输出文本路径；提供时写出 UTF-8 文本，每行一个 commit。
+        output_file: 可选输出文本路径；提供时写出 UTF-8 文本。Commit信息
+                     原始内容按分号分隔字段，只保留第 1 段 hash 和第 2 段
+                     title，输出格式为 "12位hash    commit title"。
 
     Returns:
         JSON 对象，包含 commits 列表、统计信息、可选 output_file 及 error。
-        commits 可直接作为 MCP check/cherry_pick 的 commits 参数。
+        commits 可直接作为 MCP check/cherry_pick 的 commits 参数；分号字段中
+        不能解析出至少 12 位 hash 和非空 title 的 Commit信息 会被跳过并计数。
     """
     input_path = Path(input_file)
     try:

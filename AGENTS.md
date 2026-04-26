@@ -7,7 +7,7 @@ This repository contains small Python CLI tools for backport and patch workflows
 - `patch_tool.py`: git patch management with `check`, `cherry-pick`, and `sync-meta`.
 - `pr_tool.py`: PR statistics collection for gitee, gitcode.net, gitcode.com, and atomgit URLs.
 - `file_check_tool.py`: basename-based file presence checks across system directories.
-- `excel_tool.py`: Excel row splitting for cells that contain newline characters.
+- `excel_tool.py`: Excel row splitting and `Commit信息` commit-list export.
 - `mcp_server.py`: MCP server exposing the patch, PR, file-check, and Excel commit export capabilities.
 
 Most core CLI tools are stdlib-only. `mcp_server.py` and `excel_tool.py` require dependencies listed in `requirements.txt`.
@@ -71,7 +71,8 @@ python3 excel_tool.py --help
 - `file_check_tool.py` reads file names from `-i/--input`, matches by exact basename, prints a table, and can write CSV with `--csv`.
 - `file_check_tool.py --roots` fully overrides default search roots.
 - Without `--roots`, `file_check_tool.py --os-family {auto,generic,debian,rpm}` controls default roots. `auto` reads `/etc/os-release`; `rpm` covers CentOS/RHEL/openEuler-style layouts; `debian` adds Debian multiarch library directories.
-- `excel_tool.py INPUT OUTPUT` processes all worksheets in `.xlsx` / `.xlsm` files. If a row contains newline-delimited cell content, it expands that row into multiple rows; cells with fewer segments are left blank in later rows.
+- `excel_tool.py INPUT OUTPUT` processes all worksheets in `.xlsx` / `.xlsm` files. It splits rows only by the `Commit信息` column, ignores blank commit segments, and fills other columns from the original row.
+- `excel_tool.py export-commits INPUT OUTPUT` treats each `Commit信息` entry as semicolon-delimited fields, keeps only field 1 as commit hash and field 2 as commit title, and exports text lines formatted as `12-char-hash    commit title` (four spaces between hash and title). Entries without at least a 12-character hash and non-empty title are skipped.
 
 ### No build step
 

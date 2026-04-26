@@ -16,8 +16,8 @@ Excel 表格换行单元格拆行工具。
 导出补丁列表：
   python3 excel_tool.py export-commits INPUT OUTPUT
 
-  从 Commit信息 列导出 patch_tool.py 可读取的文本列表，每行一个 commit
-  条目，默认按首次出现顺序去重。
+  Commit信息 原始内容按分号分隔字段，导出时只保留 commit hash 和
+  commit title，格式为 12 位 hash、四个空格和 title。
 """
 
 import argparse
@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 SUPPORTED_SUFFIXES = (".xlsx", ".xlsm")
 DEFAULT_PROGRESS_INTERVAL = 10000
 COMMIT_INFO_HEADER = "Commit信息"
+COMMIT_EXPORT_SEPARATOR = "    "
 
 LOG = logging.getLogger(__name__)
 
@@ -61,6 +62,26 @@ def _split_cell_value(value: Any) -> List[Any]:
 
     normalized = _normalize_newlines(value)
     return [part for part in normalized.split("\n") if part.strip()]
+
+
+def _format_export_commit(value: Any) -> Optional[str]:
+    """从分号分隔的 Commit信息 中导出 12 位 hash + 四个空格 + title。"""
+    fields = [field.strip() for field in str(value).replace("；", ";").split(";")]
+    if len(fields) < 2:
+        return None
+    commit_hash, title = fields[0].lower(), fields[1]
+    if (
+        len(commit_hash) < 12
+        or len(commit_hash) > 40
+        or not all(ch in "0123456789abcdef" for ch in commit_hash)
+        or not title
+    ):
+        return None
+    return "{0}{1}{2}".format(
+        commit_hash[:12],
+        COMMIT_EXPORT_SEPARATOR,
+        title,
+    )
 
 
 def _header_text(value: Any) -> str:
@@ -357,6 +378,7 @@ def collect_commits(input_file: Path) -> Dict[str, Any]:
         "rows_scanned": 0,
         "commits_exported": 0,
         "duplicates_skipped": 0,
+        "invalid_commits_skipped": 0,
     }
     entries: List[str] = []
     seen: Set[str] = set()
@@ -379,6 +401,7 @@ def collect_commits(input_file: Path) -> Dict[str, Any]:
             sheet_started_at = monotonic()
             sheet_exported = 0
             sheet_duplicates = 0
+            sheet_invalid = 0
             LOG.info(
                 "开始导出工作表: sheet=%s, rows=%d, commit_column=%d",
                 worksheet.title,
@@ -396,8 +419,10 @@ def collect_commits(input_file: Path) -> Dict[str, Any]:
                 if len(row_values) < commit_column:
                     continue
                 for part in _split_cell_value(row_values[commit_column - 1]):
-                    commit = str(part).strip()
-                    if not commit:
+                    commit = _format_export_commit(part)
+                    if commit is None:
+                        stats["invalid_commits_skipped"] += 1
+                        sheet_invalid += 1
                         continue
                     if commit in seen:
                         stats["duplicates_skipped"] += 1
@@ -409,11 +434,12 @@ def collect_commits(input_file: Path) -> Dict[str, Any]:
                     sheet_exported += 1
 
             LOG.info(
-                "导出工作表完成: sheet=%s, exported=%d, duplicates=%d, "
+                "导出工作表完成: sheet=%s, exported=%d, duplicates=%d, invalid=%d, "
                 "elapsed=%.1fs",
                 worksheet.title,
                 sheet_exported,
                 sheet_duplicates,
+                sheet_invalid,
                 monotonic() - sheet_started_at,
             )
     finally:
@@ -516,7 +542,10 @@ def build_export_commits_parser(prog: Optional[str] = None) -> argparse.Argument
     """构造 export-commits 子命令参数解析器。"""
     parser = argparse.ArgumentParser(
         prog=prog,
-        description="从 Excel Commit信息 列导出 patch_tool.py 可读取的 commit 列表",
+        description=(
+            "从分号分隔的 Excel Commit信息 列导出 12 位 hash + 四个空格 + "
+            "title 的 commit 列表"
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("input", metavar="INPUT", help="输入 Excel 文件（.xlsx/.xlsm）")
@@ -589,7 +618,8 @@ def cmd_export_commits(args: argparse.Namespace) -> int:
     print(
         "导出完成: sheets={sheets}, skipped_sheets={sheets_skipped}, "
         "scanned_rows={rows_scanned}, commits={commits_exported}, "
-        "duplicates_skipped={duplicates_skipped}".format(**stats)
+        "duplicates_skipped={duplicates_skipped}, "
+        "invalid_skipped={invalid_commits_skipped}".format(**stats)
     )
     print("输出文件: {0}".format(output_file))
     return 0
