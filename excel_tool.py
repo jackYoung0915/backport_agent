@@ -3,14 +3,14 @@
 """
 Excel 表格换行单元格拆行工具。
 
-读取 .xlsx/.xlsm 工作簿，逐行检查每个单元格内容；如果某一行中任意
+读取 .xlsx/.xlsm 工作簿，按首行表头定位 Commit信息 列；如果该列
 字符串单元格包含换行符，则将这一行按换行段展开为多行。
 
 拆分规则：
   - 支持 \\n、\\r\\n、\\r
-  - 同一行按所有单元格的最大拆分段数展开
-  - 无换行单元格只保留在展开后的第一行，后续行留空
-  - 某个单元格段数不足时，缺失段留空
+  - 仅 Commit信息 列参与拆分
+  - 其他列不参与拆分，生成的每一行都复制原行对应列的值
+  - 找不到 Commit信息 表头的工作表会跳过并输出告警
 """
 
 import argparse
@@ -19,11 +19,12 @@ import sys
 from copy import copy
 from pathlib import Path
 from time import monotonic
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
 
 SUPPORTED_SUFFIXES = (".xlsx", ".xlsm")
 DEFAULT_PROGRESS_INTERVAL = 10000
+COMMIT_INFO_HEADER = "Commit信息"
 
 LOG = logging.getLogger(__name__)
 
@@ -55,22 +56,32 @@ def _split_cell_value(value: Any) -> List[Any]:
     return normalized.split("\n")
 
 
-def _row_split_parts_from_values(
-    row_values: Sequence[Any],
-) -> Tuple[int, int, List[List[Any]]]:
-    """返回一行的最大拆分段数、含换行单元格数和每列拆分段。"""
-    max_parts = 1
-    split_cells = 0
-    parts_by_column: List[List[Any]] = []
+def _header_text(value: Any) -> str:
+    """返回用于表头匹配的文本。"""
+    if value is None:
+        return ""
+    return str(value).strip()
 
-    for value in row_values:
-        parts = _split_cell_value(value)
-        if len(parts) > 1:
-            split_cells += 1
-            max_parts = max(max_parts, len(parts))
-        parts_by_column.append(parts)
 
-    return max_parts, split_cells, parts_by_column
+def _find_commit_info_column(
+    worksheet: Any, max_column: int, header_name: str = COMMIT_INFO_HEADER
+) -> Optional[int]:
+    """按首行表头查找 Commit信息 列号。"""
+    matched_columns: List[int] = []
+    for col_idx in range(1, max_column + 1):
+        if _header_text(worksheet.cell(row=1, column=col_idx).value) == header_name:
+            matched_columns.append(col_idx)
+
+    if not matched_columns:
+        return None
+    if len(matched_columns) > 1:
+        LOG.warning(
+            "工作表存在多个 %s 表头: sheet=%s, columns=%s，使用第一个",
+            header_name,
+            worksheet.title,
+            ",".join(str(col_idx) for col_idx in matched_columns),
+        )
+    return matched_columns[0]
 
 
 def _copy_cell_format(source: Any, target: Any) -> None:
@@ -116,7 +127,8 @@ def _copy_row_values_and_format(
     source_row: int,
     target_row: int,
     max_column: int,
-    parts_by_column: Optional[Sequence[Sequence[Any]]] = None,
+    commit_column: Optional[int] = None,
+    commit_parts: Optional[Sequence[Any]] = None,
     part_idx: int = 0,
 ) -> None:
     """复制一行格式并写入目标行值。"""
@@ -126,10 +138,10 @@ def _copy_row_values_and_format(
         source = worksheet.cell(row=source_row, column=col_idx)
         target = worksheet.cell(row=target_row, column=col_idx)
         _copy_cell_format(source, target)
-        if parts_by_column is None:
-            target.value = source.value
+        if commit_parts is not None and col_idx == commit_column:
+            target.value = _value_for_part(commit_parts, part_idx)
         else:
-            target.value = _value_for_part(parts_by_column[col_idx - 1], part_idx)
+            target.value = source.value
 
 
 def _value_for_part(parts: Sequence[Any], part_idx: int) -> Any:
@@ -149,7 +161,7 @@ def _should_log_progress(processed: int, total: int, interval: int) -> bool:
 def split_worksheet(
     worksheet: Any, progress_interval: int = DEFAULT_PROGRESS_INTERVAL
 ) -> Dict[str, int]:
-    """拆分单个 worksheet 中包含换行单元格的行。"""
+    """拆分单个 worksheet 中 Commit信息 列包含换行的行。"""
     stats = {
         "rows_scanned": 0,
         "rows_split": 0,
@@ -158,43 +170,46 @@ def split_worksheet(
     }
     max_row = worksheet.max_row
     max_column = worksheet.max_column
-    split_rows: Dict[int, Tuple[int, List[List[Any]]]] = {}
+    commit_column = _find_commit_info_column(worksheet, max_column)
+    if commit_column is None:
+        LOG.warning(
+            "跳过工作表: sheet=%s, reason=未找到 %s 表头",
+            worksheet.title,
+            COMMIT_INFO_HEADER,
+        )
+        return stats
+
+    data_rows = max(0, max_row - 1)
+    split_rows: Dict[int, List[Any]] = {}
     started_at = monotonic()
 
     LOG.info(
-        "开始扫描工作表: sheet=%s, rows=%d, columns=%d",
+        "开始扫描工作表: sheet=%s, data_rows=%d, columns=%d, commit_column=%d",
         worksheet.title,
-        max_row,
+        data_rows,
         max_column,
+        commit_column,
     )
 
-    for row_idx, row_values in enumerate(
-        worksheet.iter_rows(
-            min_row=1,
-            max_row=max_row,
-            max_col=max_column,
-            values_only=True,
-        ),
-        start=1,
-    ):
+    for row_idx in range(2, max_row + 1):
         stats["rows_scanned"] += 1
-        max_parts, split_cells, parts_by_column = _row_split_parts_from_values(
-            row_values
+        commit_parts = _split_cell_value(
+            worksheet.cell(row=row_idx, column=commit_column).value
         )
-        if max_parts > 1:
-            rows_to_add = max_parts - 1
-            split_rows[row_idx] = (max_parts, parts_by_column)
+        if len(commit_parts) > 1:
+            rows_to_add = len(commit_parts) - 1
+            split_rows[row_idx] = commit_parts
             stats["rows_split"] += 1
             stats["rows_added"] += rows_to_add
-            stats["cells_split"] += split_cells
+            stats["cells_split"] += 1
 
-        if _should_log_progress(stats["rows_scanned"], max_row, progress_interval):
+        if _should_log_progress(stats["rows_scanned"], data_rows, progress_interval):
             LOG.info(
                 "扫描进度: sheet=%s, scanned=%d/%d, split_rows=%d, "
                 "added_rows=%d, elapsed=%.1fs",
                 worksheet.title,
                 stats["rows_scanned"],
-                max_row,
+                data_rows,
                 stats["rows_split"],
                 stats["rows_added"],
                 monotonic() - started_at,
@@ -218,45 +233,46 @@ def split_worksheet(
     rewrite_started_at = monotonic()
     final_rows = max_row + stats["rows_added"]
     LOG.info(
-        "开始重写工作表: sheet=%s, original_rows=%d, final_rows=%d",
+        "开始重写工作表: sheet=%s, original_rows=%d, final_rows=%d, commit_column=%d",
         worksheet.title,
         max_row,
         final_rows,
+        commit_column,
     )
 
     added_after = 0
     rows_rewritten = 0
-    for row_idx in range(max_row, 0, -1):
-        split_plan = split_rows.get(row_idx)
-        rows_to_add = 0 if split_plan is None else split_plan[0] - 1
+    for row_idx in range(max_row, 1, -1):
+        commit_parts = split_rows.get(row_idx)
+        rows_to_add = 0 if commit_parts is None else len(commit_parts) - 1
         added_before = stats["rows_added"] - added_after - rows_to_add
         target_start = row_idx + added_before
 
-        if split_plan is None:
+        if commit_parts is None:
             if target_start != row_idx:
                 _copy_row_values_and_format(
                     worksheet, row_idx, target_start, max_column
                 )
         else:
-            max_parts, parts_by_column = split_plan
-            for offset in range(max_parts):
+            for offset in range(len(commit_parts)):
                 _copy_row_values_and_format(
                     worksheet,
                     row_idx,
                     target_start + offset,
                     max_column,
-                    parts_by_column,
+                    commit_column,
+                    commit_parts,
                     offset,
                 )
 
         added_after += rows_to_add
         rows_rewritten += 1
-        if _should_log_progress(rows_rewritten, max_row, progress_interval):
+        if _should_log_progress(rows_rewritten, data_rows, progress_interval):
             LOG.info(
                 "重写进度: sheet=%s, source_rows=%d/%d, elapsed=%.1fs",
                 worksheet.title,
                 rows_rewritten,
-                max_row,
+                data_rows,
                 monotonic() - rewrite_started_at,
             )
 
@@ -334,7 +350,7 @@ def _validate_paths(input_file: Path, output_file: Path) -> Optional[str]:
 def build_parser() -> argparse.ArgumentParser:
     """构造命令行参数解析器。"""
     parser = argparse.ArgumentParser(
-        description="按单元格换行符拆分 Excel 行",
+        description="按 Commit信息 列换行符拆分 Excel 行",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
