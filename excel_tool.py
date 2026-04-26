@@ -9,6 +9,7 @@ Excel 表格换行单元格拆行工具。
 拆分规则：
   - 支持 \\n、\\r\\n、\\r
   - 仅 Commit信息 列参与拆分
+  - Commit信息 中的空白行会被忽略，不生成输出行
   - 其他列不参与拆分，生成的每一行都复制原行对应列的值
   - 找不到 Commit信息 表头的工作表会跳过并输出告警
 """
@@ -46,14 +47,14 @@ def _normalize_newlines(text: str) -> str:
 
 
 def _split_cell_value(value: Any) -> List[Any]:
-    """按换行符拆分字符串单元格值。"""
+    """按换行符拆分字符串单元格值，并忽略空白段。"""
     if not isinstance(value, str):
         return [value]
 
     normalized = _normalize_newlines(value)
     if "\n" not in normalized:
         return [value]
-    return normalized.split("\n")
+    return [part for part in normalized.split("\n") if part.strip()]
 
 
 def _header_text(value: Any) -> str:
