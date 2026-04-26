@@ -13,10 +13,12 @@
 
 import argparse
 import json
+from pathlib import Path
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
+from excel_tool import collect_commits, export_commits
 from file_check_tool import (
     _build_rows,
     _count_summary,
@@ -31,7 +33,7 @@ mcp = FastMCP(
     "backport-agent",
     instructions=(
         "补丁/PR/文件检查工具，提供补丁合入检查、批量 cherry-pick、作者元信息同步、"
-        "PR 统计与文件存在性检查能力。"
+        "PR 统计、文件存在性检查与 Excel Commit信息 导出能力。"
     ),
 )
 
@@ -179,6 +181,40 @@ def file_check(names: list[str], roots: Optional[list[str]] = None) -> str:
         "warnings": warnings,
         "results": rows,
     }
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def excel_export_commits(input_file: str, output_file: Optional[str] = None) -> str:
+    """从 Excel 的 Commit信息 列导出 patch_tool.py 可读取的提交列表。
+
+    Args:
+        input_file: 输入 Excel 文件路径（.xlsx/.xlsm）。每个 worksheet 首行按
+                    表头精确匹配 Commit信息 列。
+        output_file: 可选输出文本路径；提供时写出 UTF-8 文本，每行一个 commit。
+
+    Returns:
+        JSON 对象，包含 commits 列表、统计信息、可选 output_file 及 error。
+        commits 可直接作为 MCP check/cherry_pick 的 commits 参数。
+    """
+    input_path = Path(input_file)
+    try:
+        if output_file:
+            output_path = Path(output_file)
+            stats = export_commits(input_path, output_path)
+            commits = output_path.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines()
+            result = {
+                "output_file": str(output_path),
+                "commits": commits,
+                "stats": stats,
+            }
+        else:
+            result = collect_commits(input_path)
+    except Exception as exc:
+        result = {"error": str(exc)}
+
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 

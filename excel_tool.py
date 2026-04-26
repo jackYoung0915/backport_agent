@@ -12,6 +12,12 @@ Excel 表格换行单元格拆行工具。
   - Commit信息 中的空白行会被忽略，不生成输出行
   - 其他列不参与拆分，生成的每一行都复制原行对应列的值
   - 找不到 Commit信息 表头的工作表会跳过并输出告警
+
+导出补丁列表：
+  python3 excel_tool.py export-commits INPUT OUTPUT
+
+  从 Commit信息 列导出 patch_tool.py 可读取的文本列表，每行一个 commit
+  条目，默认按首次出现顺序去重。
 """
 
 import argparse
@@ -20,7 +26,7 @@ import sys
 from copy import copy
 from pathlib import Path
 from time import monotonic
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 
 SUPPORTED_SUFFIXES = (".xlsx", ".xlsm")
@@ -48,12 +54,12 @@ def _normalize_newlines(text: str) -> str:
 
 def _split_cell_value(value: Any) -> List[Any]:
     """按换行符拆分字符串单元格值，并忽略空白段。"""
+    if value is None:
+        return []
     if not isinstance(value, str):
         return [value]
 
     normalized = _normalize_newlines(value)
-    if "\n" not in normalized:
-        return [value]
     return [part for part in normalized.split("\n") if part.strip()]
 
 
@@ -333,14 +339,133 @@ def split_workbook(
     return stats
 
 
-def _validate_paths(input_file: Path, output_file: Path) -> Optional[str]:
-    """校验输入输出路径。"""
+def collect_commits(input_file: Path) -> Dict[str, Any]:
+    """从 Commit信息 列收集 patch_tool.py 可读取的 commit 列表。"""
+    openpyxl = _require_openpyxl()
+    started_at = monotonic()
+    LOG.info("开始读取工作簿: input=%s, mode=export-commits", input_file)
+    workbook = openpyxl.load_workbook(str(input_file), read_only=True, data_only=False)
+    LOG.info(
+        "读取工作簿完成: sheets=%d, elapsed=%.1fs",
+        len(workbook.worksheets),
+        monotonic() - started_at,
+    )
+
+    stats = {
+        "sheets": 0,
+        "sheets_skipped": 0,
+        "rows_scanned": 0,
+        "commits_exported": 0,
+        "duplicates_skipped": 0,
+    }
+    entries: List[str] = []
+    seen: Set[str] = set()
+
+    try:
+        for worksheet in workbook.worksheets:
+            stats["sheets"] += 1
+            commit_column = _find_commit_info_column(
+                worksheet, worksheet.max_column
+            )
+            if commit_column is None:
+                stats["sheets_skipped"] += 1
+                LOG.warning(
+                    "跳过工作表: sheet=%s, reason=未找到 %s 表头",
+                    worksheet.title,
+                    COMMIT_INFO_HEADER,
+                )
+                continue
+
+            sheet_started_at = monotonic()
+            sheet_exported = 0
+            sheet_duplicates = 0
+            LOG.info(
+                "开始导出工作表: sheet=%s, rows=%d, commit_column=%d",
+                worksheet.title,
+                max(0, worksheet.max_row - 1),
+                commit_column,
+            )
+
+            for row_values in worksheet.iter_rows(
+                min_row=2,
+                max_row=worksheet.max_row,
+                max_col=commit_column,
+                values_only=True,
+            ):
+                stats["rows_scanned"] += 1
+                if len(row_values) < commit_column:
+                    continue
+                for part in _split_cell_value(row_values[commit_column - 1]):
+                    commit = str(part).strip()
+                    if not commit:
+                        continue
+                    if commit in seen:
+                        stats["duplicates_skipped"] += 1
+                        sheet_duplicates += 1
+                        continue
+                    seen.add(commit)
+                    entries.append(commit)
+                    stats["commits_exported"] += 1
+                    sheet_exported += 1
+
+            LOG.info(
+                "导出工作表完成: sheet=%s, exported=%d, duplicates=%d, "
+                "elapsed=%.1fs",
+                worksheet.title,
+                sheet_exported,
+                sheet_duplicates,
+                monotonic() - sheet_started_at,
+            )
+    finally:
+        workbook.close()
+
+    LOG.info(
+        "全部收集完成: commits=%d, elapsed=%.1fs",
+        len(entries),
+        monotonic() - started_at,
+    )
+    return {"commits": entries, "stats": stats}
+
+
+def export_commits(input_file: Path, output_file: Path) -> Dict[str, int]:
+    """从 Commit信息 列导出 patch_tool.py 可读取的文本列表。"""
+    started_at = monotonic()
+    result = collect_commits(input_file)
+    entries = result["commits"]
+    stats = result["stats"]
+
+    output_started_at = monotonic()
+    LOG.info("开始写出 commit 列表: output=%s", output_file)
+    with output_file.open("w", encoding="utf-8", newline="\n") as f:
+        for entry in entries:
+            f.write("{0}\n".format(entry))
+
+    LOG.info(
+        "写出 commit 列表完成: output=%s, commits=%d, elapsed=%.1fs",
+        output_file,
+        stats["commits_exported"],
+        monotonic() - output_started_at,
+    )
+    LOG.info("全部导出完成: elapsed=%.1fs", monotonic() - started_at)
+    return stats
+
+
+def _validate_input_excel_path(input_file: Path) -> Optional[str]:
+    """校验输入 Excel 路径。"""
     if not input_file.exists():
         return "输入文件不存在: {0}".format(input_file)
     if not input_file.is_file():
         return "输入路径不是普通文件: {0}".format(input_file)
     if input_file.suffix.lower() not in SUPPORTED_SUFFIXES:
         return "不支持的输入格式，仅支持 .xlsx/.xlsm: {0}".format(input_file)
+    return None
+
+
+def _validate_paths(input_file: Path, output_file: Path) -> Optional[str]:
+    """校验输入输出路径。"""
+    input_error = _validate_input_excel_path(input_file)
+    if input_error:
+        return input_error
     if output_file.suffix.lower() not in SUPPORTED_SUFFIXES:
         return "不支持的输出格式，仅支持 .xlsx/.xlsm: {0}".format(output_file)
     if output_file.parent and not output_file.parent.exists():
@@ -348,9 +473,20 @@ def _validate_paths(input_file: Path, output_file: Path) -> Optional[str]:
     return None
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """构造命令行参数解析器。"""
+def _validate_export_paths(input_file: Path, output_file: Path) -> Optional[str]:
+    """校验 export-commits 输入输出路径。"""
+    input_error = _validate_input_excel_path(input_file)
+    if input_error:
+        return input_error
+    if output_file.parent and not output_file.parent.exists():
+        return "输出目录不存在: {0}".format(output_file.parent)
+    return None
+
+
+def build_parser(prog: Optional[str] = None) -> argparse.ArgumentParser:
+    """构造默认拆分命令参数解析器。"""
     parser = argparse.ArgumentParser(
+        prog=prog,
         description="按 Commit信息 列换行符拆分 Excel 行",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
@@ -376,14 +512,34 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    """程序入口。"""
-    args = build_parser().parse_args(argv)
+def build_export_commits_parser(prog: Optional[str] = None) -> argparse.ArgumentParser:
+    """构造 export-commits 子命令参数解析器。"""
+    parser = argparse.ArgumentParser(
+        prog=prog,
+        description="从 Excel Commit信息 列导出 patch_tool.py 可读取的 commit 列表",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("input", metavar="INPUT", help="输入 Excel 文件（.xlsx/.xlsm）")
+    parser.add_argument("output", metavar="OUTPUT", help="输出文本文件")
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="输出 debug 日志",
+    )
+    return parser
+
+
+def _configure_logging(verbose: bool) -> None:
+    """初始化日志。"""
     logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
+        level=logging.DEBUG if verbose else logging.INFO,
         format="%(message)s",
     )
 
+
+def cmd_split(args: argparse.Namespace) -> int:
+    """执行默认 Excel 拆分命令。"""
     input_file = Path(args.input)
     output_file = Path(args.output)
 
@@ -409,6 +565,50 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     print("输出文件: {0}".format(output_file))
     return 0
+
+
+def cmd_export_commits(args: argparse.Namespace) -> int:
+    """执行 export-commits 子命令。"""
+    input_file = Path(args.input)
+    output_file = Path(args.output)
+
+    error = _validate_export_paths(input_file, output_file)
+    if error:
+        print("错误: {0}".format(error), file=sys.stderr)
+        return 1
+
+    try:
+        stats = export_commits(input_file, output_file)
+    except RuntimeError as exc:
+        print("错误: {0}".format(exc), file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print("错误: 无法导出 commit 列表: {0}".format(exc), file=sys.stderr)
+        return 1
+
+    print(
+        "导出完成: sheets={sheets}, skipped_sheets={sheets_skipped}, "
+        "scanned_rows={rows_scanned}, commits={commits_exported}, "
+        "duplicates_skipped={duplicates_skipped}".format(**stats)
+    )
+    print("输出文件: {0}".format(output_file))
+    return 0
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """程序入口。"""
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    if raw_args and raw_args[0] == "export-commits":
+        parser = build_export_commits_parser(
+            prog="{0} export-commits".format(Path(sys.argv[0]).name)
+        )
+        args = parser.parse_args(raw_args[1:])
+        _configure_logging(args.verbose)
+        return cmd_export_commits(args)
+
+    args = build_parser(prog=Path(sys.argv[0]).name).parse_args(raw_args)
+    _configure_logging(args.verbose)
+    return cmd_split(args)
 
 
 if __name__ == "__main__":
