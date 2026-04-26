@@ -1,0 +1,17 @@
+excel_tool.py patch_tool.py excel_tool.py的输出是否可以作为patch_tool.py的输入，从架构合理性上看这么搞好吗
+
+---
+
+做一个子命令吧
+
+---
+
+Implement the plan.
+
+---
+
+同步更新一下MCP
+
+---
+
+帮我新增一条规则，每次项目代码有更新时，同步检查mcp是否需要更新
