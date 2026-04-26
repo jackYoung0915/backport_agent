@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.5.5",
+  "checkpoint_id": "59c22d4f9b52",
+  "session_id": "019dc7ba-90d7-7b22-8de6-fdbefb2f45ef",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-26T04:27:56.971889951Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "excel_tool.py"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.5",
+  "turn_id": "4291721de062",
+  "checkpoint_transcript_start": 347,
+  "transcript_lines_at_start": 347,
+  "token_usage": {
+    "input_tokens": 716606,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 652288,
+    "output_tokens": 6131,
+    "api_call_count": 16
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-26T04:27:56.95548366Z",
+    "agent_lines": 3,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 3,
+    "total_lines_changed": 5,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
