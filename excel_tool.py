@@ -14,13 +14,18 @@ Excel 表格换行单元格拆行工具。
 """
 
 import argparse
+import logging
 import sys
 from copy import copy
 from pathlib import Path
+from time import monotonic
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 SUPPORTED_SUFFIXES = (".xlsx", ".xlsm")
+DEFAULT_PROGRESS_INTERVAL = 10000
+
+LOG = logging.getLogger(__name__)
 
 
 def _require_openpyxl() -> Any:
@@ -50,16 +55,15 @@ def _split_cell_value(value: Any) -> List[Any]:
     return normalized.split("\n")
 
 
-def _row_split_parts(
-    worksheet: Any, row_idx: int, max_column: int
+def _row_split_parts_from_values(
+    row_values: Sequence[Any],
 ) -> Tuple[int, int, List[List[Any]]]:
     """返回一行的最大拆分段数、含换行单元格数和每列拆分段。"""
     max_parts = 1
     split_cells = 0
     parts_by_column: List[List[Any]] = []
 
-    for col_idx in range(1, max_column + 1):
-        value = worksheet.cell(row=row_idx, column=col_idx).value
+    for value in row_values:
         parts = _split_cell_value(value)
         if len(parts) > 1:
             split_cells += 1
@@ -71,17 +75,34 @@ def _row_split_parts(
 
 def _copy_cell_format(source: Any, target: Any) -> None:
     """复制常见单元格格式。"""
-    if source.has_style:
-        target._style = copy(source._style)
+    if source is target:
+        return
+    target._style = copy(source._style)
     target.number_format = source.number_format
     target.alignment = copy(source.alignment)
     target.protection = copy(source.protection)
+    target.hyperlink = copy(source.hyperlink) if source.hyperlink else None
+    target.comment = copy(source.comment) if source.comment else None
 
 
 def _copy_row_format(
     worksheet: Any, source_row: int, target_row: int, max_column: int
 ) -> None:
     """复制行高、隐藏状态和单元格格式。"""
+    _copy_row_dimension(worksheet, source_row, target_row)
+
+    for col_idx in range(1, max_column + 1):
+        _copy_cell_format(
+            worksheet.cell(row=source_row, column=col_idx),
+            worksheet.cell(row=target_row, column=col_idx),
+        )
+
+
+def _copy_row_dimension(worksheet: Any, source_row: int, target_row: int) -> None:
+    """复制行高和隐藏状态等行级格式。"""
+    if source_row == target_row:
+        return
+
     source_dimension = worksheet.row_dimensions[source_row]
     target_dimension = worksheet.row_dimensions[target_row]
     target_dimension.height = source_dimension.height
@@ -89,11 +110,26 @@ def _copy_row_format(
     target_dimension.outlineLevel = source_dimension.outlineLevel
     target_dimension.collapsed = source_dimension.collapsed
 
+
+def _copy_row_values_and_format(
+    worksheet: Any,
+    source_row: int,
+    target_row: int,
+    max_column: int,
+    parts_by_column: Optional[Sequence[Sequence[Any]]] = None,
+    part_idx: int = 0,
+) -> None:
+    """复制一行格式并写入目标行值。"""
+    _copy_row_dimension(worksheet, source_row, target_row)
+
     for col_idx in range(1, max_column + 1):
-        _copy_cell_format(
-            worksheet.cell(row=source_row, column=col_idx),
-            worksheet.cell(row=target_row, column=col_idx),
-        )
+        source = worksheet.cell(row=source_row, column=col_idx)
+        target = worksheet.cell(row=target_row, column=col_idx)
+        _copy_cell_format(source, target)
+        if parts_by_column is None:
+            target.value = source.value
+        else:
+            target.value = _value_for_part(parts_by_column[col_idx - 1], part_idx)
 
 
 def _value_for_part(parts: Sequence[Any], part_idx: int) -> Any:
@@ -103,7 +139,16 @@ def _value_for_part(parts: Sequence[Any], part_idx: int) -> Any:
     return None
 
 
-def split_worksheet(worksheet: Any) -> Dict[str, int]:
+def _should_log_progress(processed: int, total: int, interval: int) -> bool:
+    """判断是否需要输出长任务进度日志。"""
+    if interval <= 0 or total <= 0:
+        return False
+    return processed % interval == 0 or processed == total
+
+
+def split_worksheet(
+    worksheet: Any, progress_interval: int = DEFAULT_PROGRESS_INTERVAL
+) -> Dict[str, int]:
     """拆分单个 worksheet 中包含换行单元格的行。"""
     stats = {
         "rows_scanned": 0,
@@ -111,31 +156,116 @@ def split_worksheet(worksheet: Any) -> Dict[str, int]:
         "rows_added": 0,
         "cells_split": 0,
     }
+    max_row = worksheet.max_row
     max_column = worksheet.max_column
+    split_rows: Dict[int, Tuple[int, List[List[Any]]]] = {}
+    started_at = monotonic()
 
-    for row_idx in range(worksheet.max_row, 0, -1):
+    LOG.info(
+        "开始扫描工作表: sheet=%s, rows=%d, columns=%d",
+        worksheet.title,
+        max_row,
+        max_column,
+    )
+
+    for row_idx, row_values in enumerate(
+        worksheet.iter_rows(
+            min_row=1,
+            max_row=max_row,
+            max_col=max_column,
+            values_only=True,
+        ),
+        start=1,
+    ):
         stats["rows_scanned"] += 1
-        max_parts, split_cells, parts_by_column = _row_split_parts(
-            worksheet, row_idx, max_column
+        max_parts, split_cells, parts_by_column = _row_split_parts_from_values(
+            row_values
         )
-        if max_parts <= 1:
-            continue
+        if max_parts > 1:
+            rows_to_add = max_parts - 1
+            split_rows[row_idx] = (max_parts, parts_by_column)
+            stats["rows_split"] += 1
+            stats["rows_added"] += rows_to_add
+            stats["cells_split"] += split_cells
 
-        rows_to_add = max_parts - 1
-        worksheet.insert_rows(row_idx + 1, rows_to_add)
-        for offset in range(1, max_parts):
-            _copy_row_format(worksheet, row_idx, row_idx + offset, max_column)
+        if _should_log_progress(stats["rows_scanned"], max_row, progress_interval):
+            LOG.info(
+                "扫描进度: sheet=%s, scanned=%d/%d, split_rows=%d, "
+                "added_rows=%d, elapsed=%.1fs",
+                worksheet.title,
+                stats["rows_scanned"],
+                max_row,
+                stats["rows_split"],
+                stats["rows_added"],
+                monotonic() - started_at,
+            )
 
-        for offset in range(max_parts):
-            target_row = row_idx + offset
-            for col_idx, parts in enumerate(parts_by_column, start=1):
-                worksheet.cell(row=target_row, column=col_idx).value = _value_for_part(
-                    parts, offset
+    LOG.info(
+        "扫描完成: sheet=%s, scanned=%d, split_rows=%d, added_rows=%d, "
+        "split_cells=%d, elapsed=%.1fs",
+        worksheet.title,
+        stats["rows_scanned"],
+        stats["rows_split"],
+        stats["rows_added"],
+        stats["cells_split"],
+        monotonic() - started_at,
+    )
+
+    if not split_rows:
+        LOG.info("无需拆分工作表: sheet=%s", worksheet.title)
+        return stats
+
+    rewrite_started_at = monotonic()
+    final_rows = max_row + stats["rows_added"]
+    LOG.info(
+        "开始重写工作表: sheet=%s, original_rows=%d, final_rows=%d",
+        worksheet.title,
+        max_row,
+        final_rows,
+    )
+
+    added_after = 0
+    rows_rewritten = 0
+    for row_idx in range(max_row, 0, -1):
+        split_plan = split_rows.get(row_idx)
+        rows_to_add = 0 if split_plan is None else split_plan[0] - 1
+        added_before = stats["rows_added"] - added_after - rows_to_add
+        target_start = row_idx + added_before
+
+        if split_plan is None:
+            if target_start != row_idx:
+                _copy_row_values_and_format(
+                    worksheet, row_idx, target_start, max_column
+                )
+        else:
+            max_parts, parts_by_column = split_plan
+            for offset in range(max_parts):
+                _copy_row_values_and_format(
+                    worksheet,
+                    row_idx,
+                    target_start + offset,
+                    max_column,
+                    parts_by_column,
+                    offset,
                 )
 
-        stats["rows_split"] += 1
-        stats["rows_added"] += rows_to_add
-        stats["cells_split"] += split_cells
+        added_after += rows_to_add
+        rows_rewritten += 1
+        if _should_log_progress(rows_rewritten, max_row, progress_interval):
+            LOG.info(
+                "重写进度: sheet=%s, source_rows=%d/%d, elapsed=%.1fs",
+                worksheet.title,
+                rows_rewritten,
+                max_row,
+                monotonic() - rewrite_started_at,
+            )
+
+    LOG.info(
+        "重写完成: sheet=%s, final_rows=%d, elapsed=%.1fs",
+        worksheet.title,
+        final_rows,
+        monotonic() - rewrite_started_at,
+    )
 
     return stats
 
@@ -146,11 +276,22 @@ def _merge_stats(total: Dict[str, int], current: Dict[str, int]) -> None:
         total[key] = total.get(key, 0) + value
 
 
-def split_workbook(input_file: Path, output_file: Path) -> Dict[str, int]:
+def split_workbook(
+    input_file: Path,
+    output_file: Path,
+    progress_interval: int = DEFAULT_PROGRESS_INTERVAL,
+) -> Dict[str, int]:
     """读取、拆分并保存工作簿。"""
     openpyxl = _require_openpyxl()
     keep_vba = input_file.suffix.lower() == ".xlsm"
+    started_at = monotonic()
+    LOG.info("开始读取工作簿: input=%s, keep_vba=%s", input_file, keep_vba)
     workbook = openpyxl.load_workbook(str(input_file), keep_vba=keep_vba)
+    LOG.info(
+        "读取工作簿完成: sheets=%d, elapsed=%.1fs",
+        len(workbook.worksheets),
+        monotonic() - started_at,
+    )
 
     stats = {
         "sheets": 0,
@@ -161,9 +302,17 @@ def split_workbook(input_file: Path, output_file: Path) -> Dict[str, int]:
     }
     for worksheet in workbook.worksheets:
         stats["sheets"] += 1
-        _merge_stats(stats, split_worksheet(worksheet))
+        _merge_stats(stats, split_worksheet(worksheet, progress_interval))
 
+    save_started_at = monotonic()
+    LOG.info("开始保存工作簿: output=%s", output_file)
     workbook.save(str(output_file))
+    LOG.info(
+        "保存工作簿完成: output=%s, elapsed=%.1fs",
+        output_file,
+        monotonic() - save_started_at,
+    )
+    LOG.info("全部处理完成: elapsed=%.1fs", monotonic() - started_at)
     return stats
 
 
@@ -191,12 +340,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("input", metavar="INPUT", help="输入 Excel 文件（.xlsx/.xlsm）")
     parser.add_argument("output", metavar="OUTPUT", help="输出 Excel 文件（.xlsx/.xlsm）")
+    parser.add_argument(
+        "--log-interval",
+        type=int,
+        default=DEFAULT_PROGRESS_INTERVAL,
+        metavar="ROWS",
+        help=(
+            "扫描/重写进度日志的行间隔，0 表示关闭进度日志 "
+            "（默认 {0}）".format(DEFAULT_PROGRESS_INTERVAL)
+        ),
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="输出 debug 日志",
+    )
     return parser
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """程序入口。"""
     args = build_parser().parse_args(argv)
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(message)s",
+    )
+
     input_file = Path(args.input)
     output_file = Path(args.output)
 
@@ -206,7 +376,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
 
     try:
-        stats = split_workbook(input_file, output_file)
+        stats = split_workbook(input_file, output_file, args.log_interval)
     except RuntimeError as exc:
         print("错误: {0}".format(exc), file=sys.stderr)
         return 1
