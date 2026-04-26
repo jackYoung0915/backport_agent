@@ -8,9 +8,11 @@ This repository contains small Python CLI tools for backport and patch workflows
 - `pr_tool.py`: PR statistics collection for gitee, gitcode.net, gitcode.com, and atomgit URLs.
 - `file_check_tool.py`: basename-based file presence checks across system directories.
 - `excel_tool.py`: Excel row splitting for cells that contain newline characters.
-- `mcp_server.py`: MCP server exposing the patch, PR, and file-check capabilities.
+- `mcp_server.py`: MCP server exposing the patch, PR, file-check, and Excel commit export capabilities.
 
 Most core CLI tools are stdlib-only. `mcp_server.py` and `excel_tool.py` require dependencies listed in `requirements.txt`.
+
+When project tool behavior or public interfaces change, always check whether `mcp_server.py` needs a matching tool, schema, documentation, or validation update.
 
 ### Runtime requirements
 
