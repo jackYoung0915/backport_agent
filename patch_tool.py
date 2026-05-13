@@ -241,18 +241,27 @@ def parse_input_line(line: str) -> Tuple[Optional[str], str]:
 
 
 def parse_check_output_line(line: str) -> Optional[Tuple[str, str, str]]:
-    """尝试将行解析为 check 输出格式: title|commit_id|Y/N|git_describe|commit_time。
+    """尝试将行解析为 check 输出格式。
+
+    兼容以下两种格式：
+      - 旧格式: title|commit_id|Y/N|git_describe|commit_time
+      - 新格式: title|commit_id|Y/N|git_describe|commit_time|lines_changed
 
     使用从右侧分割的策略，以正确处理 title 中可能包含 '|' 的情况。
     返回 (commit_hash, title, status)；若不是 check 格式则返回 None。
     """
-    parts = line.strip().rsplit("|", 4)
-    if len(parts) != 5:
-        return None
-    title, commit_id, status = parts[0].strip(), parts[1].strip(), parts[2].strip()
-    if status not in ("Y", "N"):
-        return None
-    return (commit_id, title, status)
+    tokens = line.strip().split("|")
+    for tail_fields in (3, 2):
+        if len(tokens) < tail_fields + 3:
+            continue
+        status_idx = len(tokens) - tail_fields - 1
+        status = tokens[status_idx].strip()
+        if status not in ("Y", "N"):
+            continue
+        commit_id = tokens[status_idx - 1].strip()
+        title = "|".join(tokens[:status_idx - 1]).strip()
+        return (commit_id, title, status)
+    return None
 
 
 def _natural_sort_key(text: str) -> Tuple[Tuple[int, Any], ...]:
@@ -301,14 +310,23 @@ def get_batch_commit_info(commit_ids: List[str], cwd: Optional[str] = None) -> D
         commit_id: {
           "describe": str,
           "timestamp": int,
-          "commit_time": str
+          "commit_time": str,
+          "lines_changed": int | None
         }
       }
     """
     if not commit_ids:
         return {}
 
-    result: Dict[str, Dict[str, Any]] = {cid: {"describe": "", "timestamp": 0, "commit_time": ""} for cid in commit_ids}
+    result: Dict[str, Dict[str, Any]] = {
+        cid: {
+            "describe": "",
+            "timestamp": 0,
+            "commit_time": "",
+            "lines_changed": None,
+        }
+        for cid in commit_ids
+    }
 
     def key_for_full_hash(full_hash: str) -> Optional[str]:
         """将 40 位 full hash 映射回 result 的 key（key 可能是短 hash）。"""
@@ -320,7 +338,7 @@ def get_batch_commit_info(commit_ids: List[str], cwd: Optional[str] = None) -> D
         return None
 
     code, out, _ = run_git(
-        ["log", "--format=%H%n%ct%n%ci"] + commit_ids,
+        ["log", "--no-walk", "--format=%H%n%ct%n%ci"] + commit_ids,
         cwd=cwd,
     )
     if code == 0:
@@ -365,6 +383,32 @@ def get_batch_commit_info(commit_ids: List[str], cwd: Optional[str] = None) -> D
         for cid, describe_line in zip(commit_ids, lines):
             if cid in result and describe_line:
                 result[cid]["describe"] = describe_line
+
+    code, out, _ = run_git(
+        ["log", "--no-walk", "--format=%H", "--numstat"] + commit_ids,
+        cwd=cwd,
+    )
+    if code == 0:
+        current_key: Optional[str] = None
+        for line in out.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            mapped_key = key_for_full_hash(stripped)
+            if mapped_key is not None:
+                current_key = mapped_key
+                result[current_key]["lines_changed"] = 0
+                continue
+
+            if current_key is None:
+                continue
+
+            parts = line.split("\t", 2)
+            if len(parts) < 3:
+                continue
+            added, deleted = parts[0].strip(), parts[1].strip()
+            if added.isdigit() and deleted.isdigit():
+                result[current_key]["lines_changed"] += int(added) + int(deleted)
 
     return result
 
@@ -454,13 +498,15 @@ def check_commits(
                 "title": display, "commit_id": cid, "status": "Y",
                 "git_describe": ci.get("describe", ""),
                 "commit_time": ci.get("commit_time", ""),
+                "lines_changed": ci.get("lines_changed"),
                 "match_method": method,
             }
             raw.append((ts, row))
         else:
             raw.append((9999999999, {
                 "title": display, "commit_id": "", "status": "N",
-                "git_describe": "", "commit_time": "", "match_method": "",
+                "git_describe": "", "commit_time": "", "lines_changed": None,
+                "match_method": "",
             }))
 
     def _sk(pair: Tuple[int, Dict[str, Any]]) -> Tuple[int, Any, int, int, str]:
@@ -786,7 +832,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     ))
     commit_info_map = get_batch_commit_info(matched_full_hashes, cwd=repo)
 
-    results: List[Tuple[int, str, str, str, str, str]] = []
+    results: List[Tuple[int, str, str, str, str, str, str]] = []
     for i, (src_hash, title) in enumerate(input_entries):
         match = per_entry[i]
         display_title = title if title else (match[2] if match else (src_hash or ""))
@@ -801,22 +847,36 @@ def cmd_check(args: argparse.Namespace) -> int:
             git_describe = info.get("describe", "")
             commit_timestamp = info.get("timestamp", 0)
             commit_time = info.get("commit_time", "")
+            lines_changed = info.get("lines_changed")
+            lines_changed_text = "" if lines_changed is None else str(lines_changed)
 
             results.append(
-                (commit_timestamp, display_title, cid, status, git_describe, commit_time)
+                (
+                    commit_timestamp,
+                    display_title,
+                    cid,
+                    status,
+                    git_describe,
+                    commit_time,
+                    lines_changed_text,
+                )
             )
             match_method = "title" if (title and title in title_index) else "hash"
             if git_describe:
-                logging.info(f"  ✓ [{match_method}] {cid} | {git_describe} | {commit_time}")
+                logging.info(
+                    f"  ✓ [{match_method}] {cid} | {git_describe} | {commit_time} | lines={lines_changed_text}"
+                )
             else:
-                logging.info(f"  ✓ [{match_method}] {cid} | {commit_time} (无 describe)")
+                logging.info(
+                    f"  ✓ [{match_method}] {cid} | {commit_time} | lines={lines_changed_text} (无 describe)"
+                )
         else:
             status = "N"
-            results.append((9999999999, display_title, "", status, "", ""))
+            results.append((9999999999, display_title, "", status, "", "", ""))
             logging.info(f"  ✗ 未在{branch_desc}中找到: {display_title}")
 
-    def result_sort_key(item: Tuple[int, str, str, str, str, str]) -> Tuple[int, Any, int, int, str]:
-        commit_timestamp, title, _commit_id, status, git_describe, _commit_time = item
+    def result_sort_key(item: Tuple[int, str, str, str, str, str, str]) -> Tuple[int, Any, int, int, str]:
+        commit_timestamp, title, _commit_id, status, git_describe, _commit_time, _lines_changed = item
         if status != "Y":
             return (2, (), 0, commit_timestamp, title)
         parsed = parse_describe_order(git_describe)
@@ -828,8 +888,10 @@ def cmd_check(args: argparse.Namespace) -> int:
     results.sort(key=result_sort_key)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
-        for _, title, commit_id, status, git_describe, commit_time in results:
-            f.write(f"{title}|{commit_id}|{status}|{git_describe}|{commit_time}\n")
+        for _, title, commit_id, status, git_describe, commit_time, lines_changed in results:
+            f.write(
+                f"{title}|{commit_id}|{status}|{git_describe}|{commit_time}|{lines_changed}\n"
+            )
 
     logging.info(f"检查完成，结果已保存到 {out}（优先按 describe 合入序排序）")
     return 0
@@ -844,6 +906,7 @@ def cmd_cherry_pick(args: argparse.Namespace) -> int:
     输入文件同时兼容以下格式（可混合使用）：
       - hash [title]              — 标准补丁列表
       - check 输出行              — title|commit_id|Y/N|describe|time
+      - check 新输出行            — title|commit_id|Y/N|describe|time|lines_changed
     check 输出中 status=N 的行会被自动跳过。
     """
     patch_file = Path(args.patch_file)
@@ -1182,14 +1245,25 @@ def main() -> int:
         "input_file", metavar="INPUT",
         help="输入文件，每行格式: 'title' 或 'hash title' 或 'hash'（≥10 位 hex）",
     )
-    p_check.add_argument("output_file", metavar="OUTPUT", help="输出文件，格式: title|commit_id|status|git_describe|commit_time (Y/N)")
+    p_check.add_argument(
+        "output_file",
+        metavar="OUTPUT",
+        help=(
+            "输出文件，格式: title|commit_id|status|git_describe|commit_time|"
+            "lines_changed；lines_changed 为增删行数之和"
+        ),
+    )
     p_check.add_argument("-b", "--branch", default=None, metavar="BRANCH", help="在指定分支上检查（默认当前分支，可为分支名或 commit/tag 等引用）")
     p_check.add_argument("-l", "--long-hash", action="store_true", help="输出使用 40 位完整 commit hash（默认使用短 hash）")
     p_check.set_defaults(func=cmd_check)
 
     # cherry-pick 子命令参数
     p_cp = sub.add_parser("cherry-pick", help="从补丁列表批量 cherry-pick（兼容 check 输出）")
-    p_cp.add_argument("patch_file", metavar="PATCH_FILE", help="补丁文件，支持 'hash [title]' 或 check 输出格式（status=N 自动跳过）")
+    p_cp.add_argument(
+        "patch_file",
+        metavar="PATCH_FILE",
+        help="补丁文件，支持 'hash [title]' 或 check 输出格式（兼容旧 5 列和新 6 列，status=N 自动跳过）",
+    )
     p_cp.add_argument("start", nargs="?", default="1", metavar="START", help="从第几个有效提交开始（默认 1）")
     p_cp.add_argument("-o", "--output", dest="log_file", default=None, metavar="FILE", help="将处理结果写入文件（每行: 状态|hash|描述）")
     p_cp.add_argument("-n", "--no-signoff", action="store_true", help="不使用 git cherry-pick --signoff")

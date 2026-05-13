@@ -64,8 +64,9 @@ python3 excel_tool.py --help
 
 ### Tool notes
 
-- `patch_tool.py check` is the safest patch subcommand for automated testing; it reads commit titles, hash+title lines, or hash-only entries and writes a report.
+- `patch_tool.py check` is the safest patch subcommand for automated testing; it reads commit titles, hash+title lines, or hash-only entries and writes a report. The current output format is `title|commit_id|status|git_describe|commit_time|lines_changed`, where `lines_changed` is the sum of added and deleted lines for that commit on the checked branch.
 - `patch_tool.py cherry-pick` can block on `input()` when conflicts occur, so avoid the CLI in unattended CI. Use the MCP `cherry_pick` tool for non-interactive automation.
+- `patch_tool.py cherry-pick` accepts both the old 5-column `check` output and the current 6-column output with trailing `lines_changed`.
 - `patch_tool.py sync-meta` rewrites git history when not in dry-run mode. Always test with `--dry-run` first and do not run destructive history rewrites unless explicitly requested.
 - `pr_tool.py` performs live HTTP requests; avoid it when only validating local interfaces.
 - `file_check_tool.py` reads file names from `-i/--input`, matches by exact basename, prints a table, and can write CSV with `--csv`.

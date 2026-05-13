@@ -59,7 +59,8 @@ def check(
     Returns:
         JSON 对象，包含 total / matched / unmatched 统计及 results 列表。
         results 按 git describe 合入序排序，每项含：
-          title, commit_id, status(Y/N), git_describe, commit_time, match_method
+          title, commit_id, status(Y/N), git_describe, commit_time,
+          lines_changed, match_method
     """
     result = check_commits(commits, repo=repo, branch=branch, long_hash=long_hash)
     return json.dumps(result, ensure_ascii=False, indent=2)
@@ -78,6 +79,7 @@ def cherry_pick(
         commits: 补丁列表。每项支持两种格式：
                  - "hash [title]": 标准补丁列表
                  - check 输出行: "title|commit_id|Y/N|describe|time"
+                 - check 新输出行: "title|commit_id|Y/N|describe|time|lines_changed"
                    （status=N 的行自动跳过）
         repo: git 仓库路径（默认当前目录）。
         signoff: 是否使用 --signoff（默认 true）。
