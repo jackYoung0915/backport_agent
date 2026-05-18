@@ -1,0 +1,60 @@
+{
+  "cli_version": "0.5.5",
+  "checkpoint_id": "cd0df7b6be38",
+  "session_id": "47ee0ff1-ad99-4b67-bfdc-f6abe532ae4f",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-18T09:26:57.230485462Z",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".codex/skills/backport-patch-tools/SKILL.md",
+    "AGENTS.md",
+    "pr_tool.py"
+  ],
+  "agent": "Cursor",
+  "model": "default",
+  "turn_id": "26dd97ecf152",
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-18T09:26:57.228603004Z",
+    "agent_lines": 0,
+    "agent_removed": 15,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 35,
+    "total_committed": 0,
+    "total_lines_changed": 50,
+    "agent_percentage": 30,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 101,
+      "user_lines_removed": 35,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".codex/skills/backport-patch-tools/SKILL.md": 51,
+        "AGENTS.md": 2,
+        "RAS.txt": 6,
+        "RAS_output.txt": 24,
+        "pr_tool.py": 18
+      },
+      "user_removed_per_file": {
+        ".codex/skills/backport-patch-tools/SKILL.md": 23,
+        "AGENTS.md": 2,
+        "pr_tool.py": 10
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 101,
+      "agent_lines_removed": 35
+    }
+  ]
+}

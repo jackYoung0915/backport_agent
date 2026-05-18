@@ -1,0 +1,20 @@
+{
+  "cli_version": "0.5.5",
+  "checkpoint_id": "cd0df7b6be38",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".codex/skills/backport-patch-tools/SKILL.md",
+    "AGENTS.md",
+    "pr_tool.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cd/0df7b6be38/0/metadata.json",
+      "transcript": "/cd/0df7b6be38/0/full.jsonl",
+      "content_hash": "/cd/0df7b6be38/0/content_hash.txt",
+      "prompt": "/cd/0df7b6be38/0/prompt.txt"
+    }
+  ]
+}
