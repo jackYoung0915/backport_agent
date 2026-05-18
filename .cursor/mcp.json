@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "backport-agent": {
+      "command": "/data/slim/backport_agent/.venv/bin/python",
+      "args": [
+        "/data/slim/backport_agent/mcp_server.py"
+      ]
+    }
+  }
+}

@@ -5,7 +5,7 @@
 This repository contains small Python CLI tools for backport and patch workflows:
 
 - `patch_tool.py`: git patch management with `check`, `cherry-pick`, and `sync-meta`.
-- `pr_tool.py`: PR statistics collection for gitee, gitcode.net, gitcode.com, and atomgit URLs.
+- `pr_tool.py`: PR statistics collection for gitee, gitcode.net, gitcode.com, and atomgit URLs, with optional commit-list-only export for `patch_tool.py check`.
 - `file_check_tool.py`: basename-based file presence checks across system directories.
 - `excel_tool.py`: Excel row splitting and `Commit信息` commit-list export.
 - `mcp_server.py`: MCP server exposing the patch, PR, file-check, and Excel commit export capabilities.
@@ -68,7 +68,7 @@ python3 excel_tool.py --help
 - `patch_tool.py cherry-pick` can block on `input()` when conflicts occur, so avoid the CLI in unattended CI. Use the MCP `cherry_pick` tool for non-interactive automation.
 - `patch_tool.py cherry-pick` accepts both the old 5-column `check` output and the current 6-column output with trailing `lines_changed`.
 - `patch_tool.py sync-meta` rewrites git history when not in dry-run mode. Always test with `--dry-run` first and do not run destructive history rewrites unless explicitly requested.
-- `pr_tool.py` performs live HTTP requests; avoid it when only validating local interfaces.
+- `pr_tool.py` performs live HTTP requests; avoid it when only validating local interfaces. Use `--commits-only` to write only `hash title` commit lines that can be passed directly to `patch_tool.py check`.
 - `file_check_tool.py` reads file names from `-i/--input`, matches by exact basename, prints a table, and can write CSV with `--csv`.
 - `file_check_tool.py --roots` fully overrides default search roots.
 - Without `--roots`, `file_check_tool.py --os-family {auto,generic,debian,rpm}` controls default roots. `auto` reads `/etc/os-release`; `rpm` covers CentOS/RHEL/openEuler-style layouts; `debian` adds Debian multiarch library directories.

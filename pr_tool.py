@@ -6,7 +6,12 @@ PR 信息统计工具。
 从输入文件读取 PR 链接，统计每个 PR 的 commit 数量和代码行数变更，
 支持 gitee、gitcode、atomgit 平台。
 
-输出格式（每行）: url|platform|commit_count|lines_changed|error
+默认输出格式（每个 PR）:
+  url|platform|commit_count|lines_changed|error
+  commit_hash commit_title
+
+使用 --commits-only 时仅输出 commit_hash commit_title 行，可直接作为
+patch_tool.py check 的输入。
 """
 
 import argparse
@@ -323,12 +328,9 @@ def _fetch_gitcode_pr_stats(owner: str, repo: str, pr_num: str, token: Optional[
             if isinstance(changes_data, dict):
                 changes = changes_data.get("changes", {})
                 diffs = changes.get("diffs", [])
-                for diff in diffs:
-                    additions = diff.get("new_linenos", {}).get("additions", 0)
-                    deletions = diff.get("old_linenos", {}).get("deletions", 0)
-                    # 另一种可能：直接从 diff 文本计算
-                    # diff 中有 new_path 和 old_path
-                    # GitLab 7.x+ 格式
+                # 另一种可能：直接从 diff 文本计算
+                # diff 中有 new_path 和 old_path
+                # GitLab 7.x+ 格式
                 # 或者使用 stats
                 if "stats" in changes_data:
                     stats = changes_data["stats"]
@@ -559,8 +561,9 @@ def cmd_stats(args: argparse.Namespace) -> int:
             lines_changed = r.get("lines_changed", -1)
             error = r.get("error", "")
             commits = r.get("commits", "")
-            f.write(f"{url}|{platform}|{commit_count}|{lines_changed}|{error}\n")
-            # 在 PR 行后输出 commit 列表
+            if not args.commits_only:
+                f.write(f"{url}|{platform}|{commit_count}|{lines_changed}|{error}\n")
+            # 在 PR 行后输出 commit 列表；--commits-only 时仅保留这些行
             if commits:
                 f.write(f"{commits}\n")
 
@@ -589,6 +592,11 @@ def main() -> int:
         default=15,
         metavar="SECONDS",
         help="HTTP 请求超时时间（默认 15 秒）",
+    )
+    parser.add_argument(
+        "--commits-only",
+        action="store_true",
+        help="仅输出 commit 列表，每行格式为 'commit_hash commit_title'，可直接作为 patch_tool.py check 输入",
     )
     parser.add_argument(
         "-v", "--verbose",
