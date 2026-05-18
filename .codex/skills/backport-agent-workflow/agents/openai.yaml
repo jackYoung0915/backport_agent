@@ -1,0 +1,6 @@
+interface:
+  display_name: "Backport Agent 工作流"
+  short_description: "补丁、PR、Excel、文件、MCP 工作流以及仓库内技能编写模板"
+  default_prompt: "使用 $backport-agent-workflow 在 backport_agent 仓库中执行补丁/PR/Excel/MCP 工作流，或创建、维护本仓库的 Codex 技能。"
+policy:
+  allow_implicit_invocation: true
