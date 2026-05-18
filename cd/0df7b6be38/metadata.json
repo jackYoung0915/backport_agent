@@ -3,11 +3,10 @@
   "checkpoint_id": "cd0df7b6be38",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 2,
+  "checkpoints_count": 1,
   "files_touched": [
-    ".codex/skills/backport-patch-tools/SKILL.md",
-    "AGENTS.md",
-    "pr_tool.py"
+    ".cursor/mcp.json",
+    "scripts/setup-kernel-workspace.sh"
   ],
   "sessions": [
     {
