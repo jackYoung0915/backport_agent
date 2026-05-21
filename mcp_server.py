@@ -44,6 +44,7 @@ def check(
     repo: str = ".",
     branch: Optional[str] = None,
     long_hash: bool = False,
+    repos: Optional[list[dict]] = None,
 ) -> str:
     """检查提交列表是否已合入目标分支。
 
@@ -52,17 +53,24 @@ def check(
                  - 纯 title: "cpufreq: Fix re-boost issue after hotplugging a CPU"
                  - hash + title: "5a76550645be3 cpufreq: Fix re-boost issue"
                  - 纯 hash (≥10 位): "5a76550645be3"
+                 多仓模式还支持 "repo_name<TAB>title/hash..." 前缀。
         repo: git 仓库路径（默认当前目录）。
         branch: 目标分支名（默认当前分支，可为 branch/tag/commit 引用）。
         long_hash: 为 true 时结果中 commit_id 使用 40 位完整 hash。
+        repos: 多仓库查询配置列表；每项包含 name/path，可选 branch。
+               传入后按配置顺序查询，任一仓库命中即 status=Y；
+               单个仓库分支无效时记录 repo_errors 并继续查其他仓库。
 
     Returns:
         JSON 对象，包含 total / matched / unmatched 统计及 results 列表。
         results 按 git describe 合入序排序，每项含：
           title, commit_id, status(Y/N), git_describe, commit_time,
-          lines_changed, match_method
+          lines_changed, match_method；多仓模式额外含 repo, repo_path,
+          branch, alternate_matches。顶层可能含 repo_errors。
     """
-    result = check_commits(commits, repo=repo, branch=branch, long_hash=long_hash)
+    result = check_commits(
+        commits, repo=repo, branch=branch, long_hash=long_hash, repos=repos,
+    )
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 

@@ -64,7 +64,9 @@ python3 excel_tool.py --help
 
 ### Tool notes
 
-- `patch_tool.py check` is the safest patch subcommand for automated testing; it reads commit titles, hash+title lines, or hash-only entries and writes a report. The current output format is `title|commit_id|status|git_describe|commit_time|lines_changed`, where `lines_changed` is the sum of added and deleted lines for that commit on the checked branch.
+- `patch_tool.py check` is the safest patch subcommand for automated testing; it reads commit titles, hash+title lines, or hash-only entries and writes a report. The current default output format is `title|commit_id|status|git_describe|commit_time|lines_changed`, where `lines_changed` is the sum of added and deleted lines for that commit on the checked branch.
+- `patch_tool.py check --repos-file repos.json` enables multi-repository lookup. The JSON file must be an array of objects with `name` and `path`, plus optional `branch`; a missing per-repo branch inherits `--branch`, then falls back to that repo's current branch. Multi-repo input may prefix a line with `repo_name<TAB>` to restrict that line to one configured repo; otherwise any configured repo can satisfy the match. Invalid repo/branch entries are logged and skipped while other repos continue.
+- `patch_tool.py check --include-repo` changes the text report to `title|repo|commit_id|status|git_describe|commit_time|lines_changed`. Do not feed this 7-column output to `cherry-pick`; keep the default 6-column output for downstream compatibility.
 - `patch_tool.py cherry-pick` can block on `input()` when conflicts occur, so avoid the CLI in unattended CI. Use the MCP `cherry_pick` tool for non-interactive automation.
 - `patch_tool.py cherry-pick` accepts both the old 5-column `check` output and the current 6-column output with trailing `lines_changed`.
 - `patch_tool.py sync-meta` rewrites git history when not in dry-run mode. Always test with `--dry-run` first and do not run destructive history rewrites unless explicitly requested.

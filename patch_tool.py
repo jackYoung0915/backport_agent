@@ -13,13 +13,15 @@
 """
 
 import argparse
+import bisect
+import json
 import logging
 import re
 import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 def _decode_output(data: Optional[bytes]) -> str:
@@ -219,6 +221,19 @@ _INPUT_HASH_TITLE_RE = re.compile(r"^([0-9a-fA-F]{7,40})\s+(.*\S.*)$")
 _INPUT_HASH_ONLY_RE = re.compile(r"^[0-9a-fA-F]{10,40}$")
 
 
+def parse_repo_prefixed_input_line(line: str, repo_names: Set[str]) -> Tuple[Optional[str], str]:
+    """解析可选的 'repo<TAB>patch line' 输入前缀。"""
+    stripped = line.strip()
+    if "\t" not in stripped:
+        return None, stripped
+    maybe_repo, rest = stripped.split("\t", 1)
+    maybe_repo = maybe_repo.strip()
+    rest = rest.strip()
+    if maybe_repo in repo_names and rest:
+        return maybe_repo, rest
+    return None, stripped
+
+
 def parse_input_line(line: str) -> Tuple[Optional[str], str]:
     """解析输入行，自动识别 'hash title'、纯 hash 或纯 title 格式。
 
@@ -416,99 +431,176 @@ def get_batch_commit_info(commit_ids: List[str], cwd: Optional[str] = None) -> D
 # --- 核心 API（供 MCP / 外部调用） ---
 
 
-def check_commits(
+def load_check_repos_file(path: str) -> List[Dict[str, Any]]:
+    """读取 check 多仓库 JSON 配置文件。"""
+    p = Path(path)
+    with open(p, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, list):
+        raise ValueError("repos-file 必须是 JSON 数组")
+    repos: List[Dict[str, Any]] = []
+    for i, item in enumerate(data, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"repos-file 第 {i} 项必须是对象")
+        name = str(item.get("name", "")).strip()
+        repo_path = str(item.get("path", "")).strip()
+        branch_value = item.get("branch")
+        branch = None if branch_value is None else str(branch_value).strip()
+        if not name:
+            raise ValueError(f"repos-file 第 {i} 项缺少 name")
+        if not repo_path:
+            raise ValueError(f"repos-file 第 {i} 项缺少 path")
+        repos.append({"name": name, "path": repo_path, "branch": branch or None})
+    return repos
+
+
+def _normalize_check_repos(
+    repo: str,
+    branch: Optional[str],
+    repos: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, Optional[str]]]:
+    """归一化 check 仓库配置，单仓模式也转成统一结构。"""
+    if repos is None:
+        return [{"name": "default", "path": repo, "branch": branch}]
+
+    normalized: List[Dict[str, Optional[str]]] = []
+    seen: Set[str] = set()
+    for i, item in enumerate(repos, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"repos 第 {i} 项必须是对象")
+        name = str(item.get("name", "")).strip()
+        path_value = str(item.get("path", "")).strip()
+        branch_value = item.get("branch")
+        if branch_value is None or str(branch_value).strip() == "":
+            branch_value = branch
+        repo_branch = None if branch_value is None else str(branch_value).strip()
+        if not name:
+            raise ValueError(f"repos 第 {i} 项缺少 name")
+        if name in seen:
+            raise ValueError(f"repos 中存在重复 name: {name}")
+        if not path_value:
+            raise ValueError(f"repos 第 {i} 项缺少 path")
+        seen.add(name)
+        normalized.append({
+            "name": name,
+            "path": path_value,
+            "branch": repo_branch or None,
+        })
+    if not normalized:
+        raise ValueError("repos 不能为空")
+    return normalized
+
+
+def _parse_check_input_entries(
     input_lines: List[str],
-    repo: str = ".",
-    branch: Optional[str] = None,
-    long_hash: bool = False,
-) -> Dict[str, Any]:
-    """检查提交列表是否已合入目标分支，返回结构化结果。
-
-    Args:
-        input_lines: 待检查的提交列表，每项支持 'title' / 'hash title' / 'hash' 格式。
-        repo: git 仓库路径。
-        branch: 目标分支（None 表示当前分支）。
-        long_hash: 结果使用 40 位完整 hash。
-
-    Returns:
-        {"total", "matched", "unmatched", "results": [{...}]}
-    """
-    input_entries: List[Tuple[Optional[str], str]] = []
+    repo_names: Set[str],
+) -> List[Dict[str, Optional[str]]]:
+    """解析 check 输入，支持可选 repo<TAB> 前缀。"""
+    entries: List[Dict[str, Optional[str]]] = []
     for line in input_lines:
         t = line.strip()
         if not t:
             continue
-        src_hash, title = parse_input_line(t)
+        repo_name, payload = parse_repo_prefixed_input_line(t, repo_names)
+        src_hash, title = parse_input_line(payload)
         if title or src_hash:
-            input_entries.append((src_hash, title))
+            entries.append({"repo": repo_name, "hash": src_hash, "title": title})
+    return entries
 
+
+def _load_repo_check_index(
+    repo_spec: Dict[str, Optional[str]],
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, str]]]:
+    """读取单个仓库的日志索引。"""
+    repo_name = repo_spec["name"] or ""
+    repo_path = repo_spec["path"] or "."
+    branch = repo_spec.get("branch")
     log_args = ["log", "--no-merges"]
     if branch:
         log_args.append(branch)
     log_args.append("--format=%H%x01%h%x01%s")
 
-    code, log_out, _ = run_git(log_args, cwd=repo)
+    code, log_out, err = run_git(log_args, cwd=repo_path)
     if code != 0:
-        return {
-            "error": "无法获取 git log，请确保在 git 仓库中且分支/引用有效",
-            "total": 0, "matched": 0, "unmatched": 0, "results": [],
+        return None, {
+            "repo": repo_name,
+            "path": repo_path,
+            "branch": branch or "",
+            "error": err or "无法获取 git log，请确保在 git 仓库中且分支/引用有效",
         }
 
-    title_index: Dict[str, Tuple[str, str]] = {}
+    title_index: Dict[str, List[Tuple[str, str, str]]] = {}
     hash_entries: List[Tuple[str, str, str]] = []
+    full_hashes: List[str] = []
     for ln in log_out.splitlines():
         parts = ln.split("\x01", 2)
         if len(parts) != 3:
             continue
-        full_h, short_h, t = parts[0].strip(), parts[1].strip(), parts[2].strip()
-        if not t:
+        full_h, short_h, title = parts[0].strip(), parts[1].strip(), parts[2].strip()
+        if not title:
             continue
-        if t not in title_index:
-            title_index[t] = (full_h, short_h)
-        hash_entries.append((full_h, short_h, t))
+        candidate = (full_h, short_h, title)
+        title_index.setdefault(title, []).append(candidate)
+        hash_entries.append(candidate)
+        full_hashes.append(full_h)
 
-    per_entry: List[Optional[Tuple[str, str, str, str]]] = []
-    for src_hash, title in input_entries:
-        matched: Optional[Tuple[str, str, str, str]] = None
-        if title and title in title_index:
-            full_h, short_h = title_index[title]
-            matched = (full_h if long_hash else short_h, full_h, title, "title")
-        if matched is None and src_hash:
-            for full_h, short_h, t in hash_entries:
-                if full_h.startswith(src_hash):
-                    matched = (full_h if long_hash else short_h, full_h, t, "hash")
-                    break
-        per_entry.append(matched)
+    hash_entries.sort(key=lambda item: item[0])
+    full_hashes = [item[0] for item in hash_entries]
+    return {
+        "name": repo_name,
+        "path": repo_path,
+        "branch": branch,
+        "title_index": title_index,
+        "hash_entries": hash_entries,
+        "full_hashes": full_hashes,
+    }, None
 
-    matched_full = list(dict.fromkeys(m[1] for m in per_entry if m))
-    info_map = get_batch_commit_info(matched_full, cwd=repo)
 
-    raw: List[Tuple[int, Dict[str, Any]]] = []
-    n_matched = 0
-    for i, (src_hash, title) in enumerate(input_entries):
-        m = per_entry[i]
-        display = title if title else (m[2] if m else (src_hash or ""))
-        if m:
-            cid, full_h, mt, method = m
-            display = display or mt
-            n_matched += 1
-            ci = info_map.get(full_h, {})
-            ts = ci.get("timestamp", 0)
-            row = {
-                "title": display, "commit_id": cid, "status": "Y",
-                "git_describe": ci.get("describe", ""),
-                "commit_time": ci.get("commit_time", ""),
-                "lines_changed": ci.get("lines_changed"),
-                "match_method": method,
-            }
-            raw.append((ts, row))
-        else:
-            raw.append((9999999999, {
-                "title": display, "commit_id": "", "status": "N",
-                "git_describe": "", "commit_time": "", "lines_changed": None,
-                "match_method": "",
-            }))
+def _find_hash_matches(index: Dict[str, Any], src_hash: str) -> List[Tuple[str, str, str]]:
+    """在单个仓库索引中按 hash 前缀查找。"""
+    full_hashes: List[str] = index["full_hashes"]
+    hash_entries: List[Tuple[str, str, str]] = index["hash_entries"]
+    pos = bisect.bisect_left(full_hashes, src_hash)
+    matches: List[Tuple[str, str, str]] = []
+    while pos < len(full_hashes) and full_hashes[pos].startswith(src_hash):
+        matches.append(hash_entries[pos])
+        pos += 1
+    return matches
 
+
+def _entry_matches_repo(
+    entry: Dict[str, Optional[str]],
+    index: Dict[str, Any],
+    long_hash: bool,
+) -> List[Dict[str, Any]]:
+    """返回某条输入在单个仓库中的所有候选命中。"""
+    title = entry.get("title") or ""
+    src_hash = entry.get("hash")
+    method = ""
+    matches: List[Tuple[str, str, str]] = []
+    if title and title in index["title_index"]:
+        method = "title"
+        matches = list(index["title_index"][title])
+    elif src_hash:
+        method = "hash"
+        matches = _find_hash_matches(index, src_hash)
+
+    result: List[Dict[str, Any]] = []
+    for full_h, short_h, matched_title in matches:
+        result.append({
+            "repo": index["name"],
+            "repo_path": index["path"],
+            "branch": index["branch"] or "",
+            "commit_id": full_h if long_hash else short_h,
+            "full_hash": full_h,
+            "matched_title": matched_title,
+            "match_method": method,
+        })
+    return result
+
+
+def _sort_check_rows(raw: List[Tuple[int, Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """按 describe 合入序排序 check 结果。"""
     def _sk(pair: Tuple[int, Dict[str, Any]]) -> Tuple[int, Any, int, int, str]:
         ts, r = pair
         if r["status"] != "Y":
@@ -519,12 +611,145 @@ def check_commits(
         return (1, (), 0, ts, r["title"])
 
     raw.sort(key=_sk)
-    return {
+    return [r for _, r in raw]
+
+
+def check_commits(
+    input_lines: List[str],
+    repo: str = ".",
+    branch: Optional[str] = None,
+    long_hash: bool = False,
+    repos: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """检查提交列表是否已合入目标分支，返回结构化结果。
+
+    Args:
+        input_lines: 待检查的提交列表，每项支持 'title' / 'hash title' / 'hash' 格式。
+        repo: git 仓库路径。
+        branch: 目标分支（None 表示当前分支）。
+        long_hash: 结果使用 40 位完整 hash。
+        repos: 多仓库配置；每项包含 name/path/branch。
+
+    Returns:
+        {"total", "matched", "unmatched", "results": [{...}]}
+    """
+    try:
+        repo_specs = _normalize_check_repos(repo, branch, repos)
+    except ValueError as e:
+        return {
+            "error": str(e),
+            "total": 0, "matched": 0, "unmatched": 0, "results": [],
+        }
+
+    multi_repo = repos is not None
+    repo_names = {r["name"] or "" for r in repo_specs} if multi_repo else set()
+    input_entries = _parse_check_input_entries(input_lines, repo_names)
+
+    indexes: List[Dict[str, Any]] = []
+    repo_errors: List[Dict[str, str]] = []
+    for repo_spec in repo_specs:
+        index, error = _load_repo_check_index(repo_spec)
+        if error:
+            repo_errors.append(error)
+            continue
+        if index:
+            indexes.append(index)
+
+    if not indexes and repo_errors:
+        result: Dict[str, Any] = {
+            "error": "无法获取任何 git log，请确保仓库路径和分支/引用有效",
+            "total": 0, "matched": 0, "unmatched": 0, "results": [],
+        }
+        if multi_repo:
+            result["repo_errors"] = repo_errors
+        return result
+
+    per_entry: List[Optional[Dict[str, Any]]] = []
+    per_entry_alternates: List[List[Dict[str, Any]]] = []
+    matched_by_repo: Dict[str, List[str]] = {}
+    repo_path_by_name: Dict[str, str] = {idx["name"]: idx["path"] for idx in indexes}
+    n_title_match = 0
+    n_hash_match = 0
+
+    for entry in input_entries:
+        requested_repo = entry.get("repo")
+        candidates: List[Dict[str, Any]] = []
+        for index in indexes:
+            if requested_repo and index["name"] != requested_repo:
+                continue
+            candidates.extend(_entry_matches_repo(entry, index, long_hash))
+
+        selected = candidates[0] if candidates else None
+        per_entry.append(selected)
+        per_entry_alternates.append(candidates[1:] if len(candidates) > 1 else [])
+        if selected:
+            matched_by_repo.setdefault(selected["repo"], []).append(selected["full_hash"])
+            if selected["match_method"] == "title":
+                n_title_match += 1
+            else:
+                n_hash_match += 1
+
+    info_by_repo: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for repo_name, full_hashes in matched_by_repo.items():
+        unique_hashes = list(dict.fromkeys(full_hashes))
+        info_by_repo[repo_name] = get_batch_commit_info(
+            unique_hashes, cwd=repo_path_by_name[repo_name],
+        )
+
+    raw: List[Tuple[int, Dict[str, Any]]] = []
+    n_matched = 0
+    for i, entry in enumerate(input_entries):
+        m = per_entry[i]
+        src_hash = entry.get("hash") or ""
+        title = entry.get("title") or ""
+        display = title if title else (m["matched_title"] if m else src_hash)
+        if m:
+            display = display or m["matched_title"]
+            n_matched += 1
+            ci = info_by_repo.get(m["repo"], {}).get(m["full_hash"], {})
+            ts = ci.get("timestamp", 0)
+            row = {
+                "title": display, "commit_id": m["commit_id"], "status": "Y",
+                "git_describe": ci.get("describe", ""),
+                "commit_time": ci.get("commit_time", ""),
+                "lines_changed": ci.get("lines_changed"),
+                "match_method": m["match_method"],
+            }
+            if multi_repo:
+                row.update({
+                    "repo": m["repo"],
+                    "repo_path": m["repo_path"],
+                    "branch": m["branch"],
+                    "alternate_matches": per_entry_alternates[i],
+                })
+            raw.append((ts, row))
+        else:
+            row = {
+                "title": display, "commit_id": "", "status": "N",
+                "git_describe": "", "commit_time": "", "lines_changed": None,
+                "match_method": "",
+            }
+            if multi_repo:
+                row.update({
+                    "repo": entry.get("repo") or "",
+                    "repo_path": "",
+                    "branch": "",
+                    "alternate_matches": [],
+                })
+            raw.append((9999999999, row))
+
+    result = {
         "total": len(input_entries),
         "matched": n_matched,
         "unmatched": len(input_entries) - n_matched,
-        "results": [r for _, r in raw],
+        "results": _sort_check_rows(raw),
     }
+    if n_title_match or n_hash_match:
+        result["title_matched"] = n_title_match
+        result["hash_matched"] = n_hash_match
+    if multi_repo:
+        result["repo_errors"] = repo_errors
+    return result
 
 
 def cherry_pick_commits(
@@ -744,154 +969,128 @@ def cmd_check(args: argparse.Namespace) -> int:
       - 纯 title:    "cpufreq: Fix re-boost issue after hotplugging a CPU"
       - hash + title: "5a76550645be3 cpufreq: Fix re-boost issue after hotplugging a CPU"
       - 纯 hash:      "5a76550645be3" (≥10 位十六进制)
+      - 多仓模式可选仓库前缀: "repo_name<TAB>title"
 
     匹配策略：优先按 title 精确匹配；若 title 未命中且输入行携带 hash，
     则以该 hash 作为前缀在目标分支日志中查找同一提交。
     """
     inp = Path(args.input_file)
     out = Path(args.output_file)
-    branch = args.branch
 
     if not inp.is_file():
         logging.error(f"输入文件不存在 '{inp}'")
         return 1
 
-    input_entries: List[Tuple[Optional[str], str]] = []
+    repos_config: Optional[List[Dict[str, Any]]] = None
+    if args.repos_file:
+        try:
+            repos_config = load_check_repos_file(args.repos_file)
+        except (OSError, ValueError, json.JSONDecodeError) as e:
+            logging.error(f"无法读取多仓库配置 '{args.repos_file}': {e}")
+            return 1
+
+    repo_names = {str(r["name"]) for r in repos_config} if repos_config else set()
+    input_lines: List[str] = []
     with open(inp, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
             t = line.strip()
             if not t:
                 continue
-            src_hash, title = parse_input_line(t)
-            if title or src_hash:
-                input_entries.append((src_hash, title))
+            input_lines.append(t)
 
-    n_with_hash = sum(1 for h, _ in input_entries if h)
+    input_entries = _parse_check_input_entries(input_lines, repo_names)
+
+    n_with_hash = sum(1 for entry in input_entries if entry.get("hash"))
     n_pure_title = len(input_entries) - n_with_hash
-    logging.info(f"读取 {len(input_entries)} 条输入（含 hash: {n_with_hash}, 纯 title: {n_pure_title}）")
-
-    branch_desc = f"分支 '{branch}'" if branch else "当前分支"
-    logging.info(f"正在获取{branch_desc}的 git log（排除 merge commit）...")
-
-    log_args = ["log", "--no-merges"]
-    if branch:
-        log_args.append(branch)
-    log_args.append("--format=%H%x01%h%x01%s")
+    n_with_repo = sum(1 for entry in input_entries if entry.get("repo"))
+    logging.info(
+        f"读取 {len(input_entries)} 条输入（含 hash: {n_with_hash}, "
+        f"纯 title: {n_pure_title}, 指定仓库: {n_with_repo}）"
+    )
 
     repo = args.repo or "."
-    code, log_out, _ = run_git(log_args, cwd=repo)
-    if code != 0:
-        logging.error("无法获取 git log，请确保在 git 仓库中且分支/引用有效")
+    if repos_config:
+        logging.info(f"正在获取 {len(repos_config)} 个候选仓库的 git log（排除 merge commit）...")
+    else:
+        branch_desc = f"分支 '{args.branch}'" if args.branch else "当前分支"
+        logging.info(f"正在获取{branch_desc}的 git log（排除 merge commit）...")
+
+    result = check_commits(
+        input_lines,
+        repo=repo,
+        branch=args.branch,
+        long_hash=args.long_hash,
+        repos=repos_config,
+    )
+
+    for repo_error in result.get("repo_errors", []):
+        logging.warning(
+            "跳过仓库 {repo} ({path}) branch={branch}: {error}".format(
+                repo=repo_error.get("repo", ""),
+                path=repo_error.get("path", ""),
+                branch=repo_error.get("branch", "") or "<current>",
+                error=repo_error.get("error", ""),
+            )
+        )
+
+    if result.get("error"):
+        logging.error(str(result["error"]))
         return 1
 
-    log_lines = [ln for ln in log_out.splitlines() if ln.strip()]
+    n_title_match = int(result.get("title_matched", 0))
+    n_hash_match = int(result.get("hash_matched", 0))
+    if n_title_match or n_hash_match:
+        logging.info(
+            f"匹配统计: title 命中 {n_title_match}, hash 命中 {n_hash_match}, "
+            f"未命中 {result.get('unmatched', 0)}"
+        )
 
-    title_index: Dict[str, Tuple[str, str]] = {}
-    hash_entries: List[Tuple[str, str, str]] = []
-
-    for ln in log_lines:
-        parts = ln.split("\x01", 2)
-        if len(parts) != 3:
-            continue
-        full_h, short_h, t = parts[0].strip(), parts[1].strip(), parts[2].strip()
-        if not t:
-            continue
-        if t not in title_index:
-            title_index[t] = (full_h, short_h)
-        hash_entries.append((full_h, short_h, t))
-
-    MatchResult = Tuple[str, str, str]  # (output_commit_id, full_hash, matched_title)
-    per_entry: List[Optional[MatchResult]] = []
-    n_title_match = 0
-    n_hash_match = 0
-
-    for src_hash, title in input_entries:
-        matched: Optional[MatchResult] = None
-
-        if title and title in title_index:
-            full_h, short_h = title_index[title]
-            cid = full_h if args.long_hash else short_h
-            matched = (cid, full_h, title)
-            n_title_match += 1
-
-        if matched is None and src_hash:
-            for full_h, short_h, t in hash_entries:
-                if full_h.startswith(src_hash):
-                    cid = full_h if args.long_hash else short_h
-                    matched = (cid, full_h, t)
-                    n_hash_match += 1
-                    break
-
-        per_entry.append(matched)
-
-    if n_hash_match:
-        logging.info(f"匹配统计: title 命中 {n_title_match}, hash 命中 {n_hash_match}, 未命中 {len(input_entries) - n_title_match - n_hash_match}")
-
-    matched_full_hashes = list(dict.fromkeys(
-        m[1] for m in per_entry if m is not None
-    ))
-    commit_info_map = get_batch_commit_info(matched_full_hashes, cwd=repo)
-
-    results: List[Tuple[int, str, str, str, str, str, str]] = []
-    for i, (src_hash, title) in enumerate(input_entries):
-        match = per_entry[i]
-        display_title = title if title else (match[2] if match else (src_hash or ""))
-
-        if match:
-            cid, full_h, matched_title = match
-            if not display_title:
-                display_title = matched_title
-
-            status = "Y"
-            info = commit_info_map.get(full_h, {})
-            git_describe = info.get("describe", "")
-            commit_timestamp = info.get("timestamp", 0)
-            commit_time = info.get("commit_time", "")
-            lines_changed = info.get("lines_changed")
-            lines_changed_text = "" if lines_changed is None else str(lines_changed)
-
-            results.append(
-                (
-                    commit_timestamp,
-                    display_title,
-                    cid,
-                    status,
-                    git_describe,
-                    commit_time,
-                    lines_changed_text,
-                )
-            )
-            match_method = "title" if (title and title in title_index) else "hash"
+    results = result.get("results", [])
+    for row in results:
+        title = row.get("title", "")
+        commit_id = row.get("commit_id", "")
+        git_describe = row.get("git_describe", "")
+        commit_time = row.get("commit_time", "")
+        lines_changed = row.get("lines_changed")
+        lines_changed_text = "" if lines_changed is None else str(lines_changed)
+        repo_prefix = f"{row.get('repo')}:" if row.get("repo") else ""
+        if row.get("status") == "Y":
+            match_method = row.get("match_method", "")
+            alt_count = len(row.get("alternate_matches", []) or [])
+            alt_note = f", alternate={alt_count}" if alt_count else ""
             if git_describe:
                 logging.info(
-                    f"  ✓ [{match_method}] {cid} | {git_describe} | {commit_time} | lines={lines_changed_text}"
+                    f"  ✓ {repo_prefix}[{match_method}] {commit_id} | "
+                    f"{git_describe} | {commit_time} | lines={lines_changed_text}{alt_note}"
                 )
             else:
                 logging.info(
-                    f"  ✓ [{match_method}] {cid} | {commit_time} | lines={lines_changed_text} (无 describe)"
+                    f"  ✓ {repo_prefix}[{match_method}] {commit_id} | "
+                    f"{commit_time} | lines={lines_changed_text} (无 describe){alt_note}"
                 )
         else:
-            status = "N"
-            results.append((9999999999, display_title, "", status, "", "", ""))
-            logging.info(f"  ✗ 未在{branch_desc}中找到: {display_title}")
+            logging.info(f"  ✗ 未找到: {title}")
 
-    def result_sort_key(item: Tuple[int, str, str, str, str, str, str]) -> Tuple[int, Any, int, int, str]:
-        commit_timestamp, title, _commit_id, status, git_describe, _commit_time, _lines_changed = item
-        if status != "Y":
-            return (2, (), 0, commit_timestamp, title)
-        parsed = parse_describe_order(git_describe)
-        if parsed is not None:
-            tag_key, distance = parsed
-            return (0, tag_key, distance, commit_timestamp, title)
-        return (1, (), 0, commit_timestamp, title)
-
-    results.sort(key=result_sort_key)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
-        for _, title, commit_id, status, git_describe, commit_time, lines_changed in results:
-            f.write(
-                f"{title}|{commit_id}|{status}|{git_describe}|{commit_time}|{lines_changed}\n"
-            )
+        for row in results:
+            title = row.get("title", "")
+            commit_id = row.get("commit_id", "")
+            status = row.get("status", "")
+            git_describe = row.get("git_describe", "")
+            commit_time = row.get("commit_time", "")
+            lines_changed = row.get("lines_changed")
+            lines_changed_text = "" if lines_changed is None else str(lines_changed)
+            if args.include_repo:
+                f.write(
+                    f"{title}|{row.get('repo', '')}|{commit_id}|{status}|"
+                    f"{git_describe}|{commit_time}|{lines_changed_text}\n"
+                )
+            else:
+                f.write(
+                    f"{title}|{commit_id}|{status}|{git_describe}|"
+                    f"{commit_time}|{lines_changed_text}\n"
+                )
 
     logging.info(f"检查完成，结果已保存到 {out}（优先按 describe 合入序排序）")
     return 0
@@ -1250,11 +1449,26 @@ def main() -> int:
         metavar="OUTPUT",
         help=(
             "输出文件，格式: title|commit_id|status|git_describe|commit_time|"
-            "lines_changed；lines_changed 为增删行数之和"
+            "lines_changed；--include-repo 时为 title|repo|commit_id|status|"
+            "git_describe|commit_time|lines_changed"
         ),
     )
     p_check.add_argument("-b", "--branch", default=None, metavar="BRANCH", help="在指定分支上检查（默认当前分支，可为分支名或 commit/tag 等引用）")
     p_check.add_argument("-l", "--long-hash", action="store_true", help="输出使用 40 位完整 commit hash（默认使用短 hash）")
+    p_check.add_argument(
+        "--repos-file",
+        default=None,
+        metavar="JSON",
+        help=(
+            "多仓库查询配置文件，JSON 数组格式: "
+            "[{\"name\":\"repo\",\"path\":\"/path/to/repo\",\"branch\":\"origin/master\"}]"
+        ),
+    )
+    p_check.add_argument(
+        "--include-repo",
+        action="store_true",
+        help="输出扩展 7 列并在 commit_id 前增加命中仓库名（默认保持 6 列兼容输出）",
+    )
     p_check.set_defaults(func=cmd_check)
 
     # cherry-pick 子命令参数
