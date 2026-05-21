@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.5.5",
+  "checkpoint_id": "78448c8f6ce6",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".codex/skills/backport-agent-workflow/SKILL.md",
+    "AGENTS.md",
+    "mcp_server.py",
+    "patch_tool.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/78/448c8f6ce6/0/metadata.json",
+      "transcript": "/78/448c8f6ce6/0/full.jsonl",
+      "content_hash": "/78/448c8f6ce6/0/content_hash.txt",
+      "prompt": "/78/448c8f6ce6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2023169,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1821952,
+    "output_tokens": 50512,
+    "api_call_count": 34
+  }
+}
