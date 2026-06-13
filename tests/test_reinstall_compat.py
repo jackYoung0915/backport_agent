@@ -8,11 +8,13 @@ class ReinstallCompatibilityTests(unittest.TestCase):
         from specdeps.package_metadata import load_package_metadata
         from specdeps.reinstall_json import build_reinstall_json
         from specdeps.reinstall_plan import build_reinstall_actions
+        from specdeps.reinstall_source import build_source_reinstall_json
         from specdeps.reinstall_txt import parse_reinstall_txt
 
         self.assertTrue(callable(load_package_metadata))
         self.assertTrue(callable(build_reinstall_json))
         self.assertTrue(callable(build_reinstall_actions))
+        self.assertTrue(callable(build_source_reinstall_json))
         self.assertTrue(callable(parse_reinstall_txt))
 
     def test_public_module_help_entrypoints_stay_available(self):
@@ -22,6 +24,7 @@ class ReinstallCompatibilityTests(unittest.TestCase):
             "specdeps.reinstall_txt_cli",
             "specdeps.reinstall_iso_cli",
             "specdeps.reinstall_apply_cli",
+            "specdeps.reinstall_source_cli",
         ):
             with self.subTest(module=module):
                 result = subprocess.run(
