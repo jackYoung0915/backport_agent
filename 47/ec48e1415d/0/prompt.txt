@@ -1,0 +1,33 @@
+帮我做一个测试，当前我想升级gcc包，调用当前项目的功能帮我实现
+
+---
+
+Implement the plan.
+
+---
+
+旧版本包卸载后新增支持从镜像源中安装新版本，不一定是本地镜像源，远程源也要支持
+
+---
+
+Implement the plan.
+
+---
+
+error: package not found in ISO source: 这个报错什么情况下会打印
+
+---
+
+如果当前ISO镜像里的版本和当前环境上的版本一致会发生什么情况
+
+---
+
+我当前是debian 的OS 比如我要升级gcc 的版本，我现在需要在输入文件中怎么写
+
+---
+
+specdeps-osp-reinstall: error: command failed: sudo apt-get remove -y 'Package: umdk-urma-lib'
+
+---
+
+当前的示例会自动加上Package: 我并没有添加，帮我修复这个bug

@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.5.5",
+  "checkpoint_id": "47ec48e1415d",
+  "strategy": "manual-commit",
+  "branch": "codex/reinstall-json-onboarding",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "pyproject.toml",
+    "src/specdeps/reinstall/source_cli.py",
+    "src/specdeps/reinstall/source_plan.py",
+    "src/specdeps/reinstall/txt_input.py",
+    "src/specdeps/reinstall_source.py",
+    "src/specdeps/reinstall_source_cli.py",
+    "tests/reinstall/test_reinstall_txt.py",
+    "tests/reinstall/test_source_reinstall.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/47/ec48e1415d/0/metadata.json",
+      "transcript": "/47/ec48e1415d/0/full.jsonl",
+      "content_hash": "/47/ec48e1415d/0/content_hash.txt",
+      "prompt": "/47/ec48e1415d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4950538,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 4180992,
+    "output_tokens": 43607,
+    "api_call_count": 52
+  }
+}

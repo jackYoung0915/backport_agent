@@ -1,0 +1,97 @@
+{
+  "cli_version": "0.5.5",
+  "checkpoint_id": "47ec48e1415d",
+  "session_id": "019ec049-189d-7d13-9930-05b5d088a439",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-13T11:56:21.811139166Z",
+  "branch": "codex/reinstall-json-onboarding",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "pyproject.toml",
+    "src/specdeps/reinstall/source_cli.py",
+    "src/specdeps/reinstall/source_plan.py",
+    "src/specdeps/reinstall/txt_input.py",
+    "src/specdeps/reinstall_source.py",
+    "src/specdeps/reinstall_source_cli.py",
+    "tests/reinstall/test_reinstall_txt.py",
+    "tests/reinstall/test_source_reinstall.py"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.5",
+  "turn_id": "ce0a7e9d6394",
+  "token_usage": {
+    "input_tokens": 4950538,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 4180992,
+    "output_tokens": 43607,
+    "api_call_count": 52
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-13T11:56:21.791767416Z",
+    "agent_lines": 329,
+    "agent_removed": 3,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 329,
+    "total_lines_changed": 332,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1089,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".codex/skills/backport-kp920/SKILL.md": 29,
+        ".codex/skills/backport-kp950/SKILL.md": 71,
+        ".codex/skills/backport-kp950/references/conflicts_resolution_strategies.md": 238,
+        ".codex/skills/backport-kp950/scripts/export-cherry-pick-conflict.sh": 137,
+        "UB_PR_0605.txt": 80,
+        "UB_PR_0605_output.txt": 267,
+        "UB_PR_0605_test.txt": 267
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1348,
+      "agent_lines_removed": 2
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1348,
+      "agent_lines_removed": 2
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1348,
+      "agent_lines_removed": 2
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1348,
+      "agent_lines_removed": 2
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1348,
+      "agent_lines_removed": 2
+    }
+  ]
+}
