@@ -1,0 +1,19 @@
+[project]
+name = "specdeps"
+version = "0.1.0"
+description = "Extract install dependency topology from RPM spec repositories"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+specdeps = "specdeps.cli:main"
+specdeps-reinstall = "specdeps.reinstall_cli:main"
+specdeps-reinstall-json = "specdeps.reinstall_json_cli:main"
+specdeps-txt-to-json = "specdeps.reinstall_txt_cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

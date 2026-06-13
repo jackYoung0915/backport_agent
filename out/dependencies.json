@@ -1,0 +1,641 @@
+{
+  "repos": [
+    "src-openEuler-cdma",
+    "src-openEuler-libvirt",
+    "src-openEuler-memlink",
+    "src-openEuler-obmm",
+    "src-openEuler-qemu",
+    "src-openEuler-sysSentry",
+    "src-openEuler-ubctl",
+    "src-openEuler-ubs-comm",
+    "src-openEuler-ubs-engine",
+    "src-openEuler-ubs-mem",
+    "src-openEuler-ubturbo",
+    "src-openEuler-ubutils",
+    "src-openEuler-umdk",
+    "src-openEuler-ummu"
+  ],
+  "edges": [
+    {
+      "source_repo": "src-openEuler-cdma",
+      "target_repo": "src-openEuler-ummu",
+      "dependency": "libummu"
+    },
+    {
+      "source_repo": "src-openEuler-libvirt",
+      "target_repo": "src-openEuler-qemu",
+      "dependency": "qemu"
+    },
+    {
+      "source_repo": "src-openEuler-libvirt",
+      "target_repo": "src-openEuler-qemu",
+      "dependency": "qemu-img"
+    },
+    {
+      "source_repo": "src-openEuler-libvirt",
+      "target_repo": "src-openEuler-qemu",
+      "dependency": "qemu-kvm"
+    },
+    {
+      "source_repo": "src-openEuler-memlink",
+      "target_repo": "src-openEuler-libvirt",
+      "dependency": "libvirt"
+    },
+    {
+      "source_repo": "src-openEuler-sysSentry",
+      "target_repo": "src-openEuler-obmm",
+      "dependency": "libobmm"
+    },
+    {
+      "source_repo": "src-openEuler-ubs-engine",
+      "target_repo": "src-openEuler-obmm",
+      "dependency": "libobmm"
+    },
+    {
+      "source_repo": "src-openEuler-ubs-engine",
+      "target_repo": "src-openEuler-ubs-comm",
+      "dependency": "ubs-comm-lib"
+    },
+    {
+      "source_repo": "src-openEuler-ubs-mem",
+      "target_repo": "src-openEuler-ubs-comm",
+      "dependency": "ubs-comm-lib"
+    },
+    {
+      "source_repo": "src-openEuler-ubs-mem",
+      "target_repo": "src-openEuler-ubs-engine",
+      "dependency": "ubs-engine"
+    },
+    {
+      "source_repo": "src-openEuler-ubs-mem",
+      "target_repo": "src-openEuler-ubs-engine",
+      "dependency": "ubs-engine-client-libs"
+    },
+    {
+      "source_repo": "src-openEuler-umdk",
+      "target_repo": "src-openEuler-ummu",
+      "dependency": "libummu"
+    }
+  ],
+  "external_requires": {
+    "src-openEuler-libvirt": [
+      "augeas",
+      "bzip2",
+      "cyrus-sasl",
+      "cyrus-sasl-gssapi",
+      "dbus",
+      "device-mapper",
+      "dmidecode",
+      "dnsmasq",
+      "ebtables",
+      "gettext",
+      "gettext-runtime",
+      "gluster",
+      "glusterfs-client",
+      "gnutls-utils",
+      "gzip",
+      "iproute",
+      "iproute-tc",
+      "iptables",
+      "iscsi-initiator-utils",
+      "lvm2",
+      "lzop",
+      "module-init-tools",
+      "netcf-libs",
+      "nfs-utils",
+      "numad",
+      "parted",
+      "pkgconfig",
+      "polkit",
+      "python3-cryptography",
+      "python3-libvirt",
+      "python3-lxml",
+      "sanlock",
+      "shadow-utils",
+      "swtpm-tools",
+      "systemctl",
+      "systemd",
+      "systemd-container",
+      "util-linux",
+      "wireshark",
+      "xen",
+      "xz",
+      "zfs",
+      "zpool"
+    ],
+    "src-openEuler-memlink": [
+      "libboundscheck",
+      "systemd-units"
+    ],
+    "src-openEuler-qemu": [
+      "getent",
+      "groupadd",
+      "libgcc",
+      "liburing",
+      "spice-gtk",
+      "systemd",
+      "systemd-units",
+      "useradd"
+    ],
+    "src-openEuler-sysSentry": [
+      "ipmitool",
+      "json-c",
+      "json-c-devel",
+      "libbpf",
+      "libtraceevent",
+      "lsof",
+      "nvme-cli",
+      "python3-numpy"
+    ],
+    "src-openEuler-ubctl": [
+      "libubctl"
+    ],
+    "src-openEuler-ubs-comm": [
+      "libboundscheck"
+    ],
+    "src-openEuler-ubs-engine": [
+      "coreutils",
+      "cpp-httplib",
+      "gawk",
+      "glibc",
+      "glibc-common",
+      "grep",
+      "libboundscheck",
+      "libgcc",
+      "libstdc++",
+      "libxml2",
+      "openssl-libs",
+      "pkgconfig",
+      "sed",
+      "shadow",
+      "systemd",
+      "tar",
+      "util-linux"
+    ],
+    "src-openEuler-ubs-mem": [
+      "glibc",
+      "libboundscheck",
+      "libgcc",
+      "libstdc++",
+      "openssl-libs"
+    ],
+    "src-openEuler-ubturbo": [
+      "coreutils",
+      "kernel"
+    ],
+    "src-openEuler-umdk": [
+      "glib2",
+      "glibc",
+      "libasan",
+      "libnl3",
+      "libtsan"
+    ]
+  },
+  "specs": [
+    {
+      "repo": "src-openEuler-cdma",
+      "spec_path": "work/repos/src-openEuler-cdma/cdma.spec",
+      "source_name": "libcdma",
+      "packages": [
+        "libcdma",
+        "libcdma-devel"
+      ],
+      "provides": [],
+      "requires": [
+        "libummu",
+        "libcdma"
+      ]
+    },
+    {
+      "repo": "src-openEuler-libvirt",
+      "spec_path": "work/repos/src-openEuler-libvirt/libvirt.spec",
+      "source_name": "libvirt",
+      "packages": [
+        "libvirt",
+        "libvirt-client",
+        "libvirt-client-qemu",
+        "libvirt-daemon",
+        "libvirt-daemon-common",
+        "libvirt-daemon-config-network",
+        "libvirt-daemon-config-nwfilter",
+        "libvirt-daemon-driver-interface",
+        "libvirt-daemon-driver-libxl",
+        "libvirt-daemon-driver-lxc",
+        "libvirt-daemon-driver-network",
+        "libvirt-daemon-driver-nodedev",
+        "libvirt-daemon-driver-nwfilter",
+        "libvirt-daemon-driver-qemu",
+        "libvirt-daemon-driver-secret",
+        "libvirt-daemon-driver-storage",
+        "libvirt-daemon-driver-storage-core",
+        "libvirt-daemon-driver-storage-disk",
+        "libvirt-daemon-driver-storage-gluster",
+        "libvirt-daemon-driver-storage-iscsi",
+        "libvirt-daemon-driver-storage-iscsi-direct",
+        "libvirt-daemon-driver-storage-logical",
+        "libvirt-daemon-driver-storage-mpath",
+        "libvirt-daemon-driver-storage-rbd",
+        "libvirt-daemon-driver-storage-scsi",
+        "libvirt-daemon-driver-storage-zfs",
+        "libvirt-daemon-driver-vbox",
+        "libvirt-daemon-kvm",
+        "libvirt-daemon-lock",
+        "libvirt-daemon-log",
+        "libvirt-daemon-lxc",
+        "libvirt-daemon-plugin-lockd",
+        "libvirt-daemon-plugin-sanlock",
+        "libvirt-daemon-proxy",
+        "libvirt-daemon-qemu",
+        "libvirt-daemon-vbox",
+        "libvirt-daemon-xen",
+        "libvirt-devel",
+        "libvirt-docs",
+        "libvirt-libs",
+        "libvirt-login-shell",
+        "libvirt-nss",
+        "libvirt-wireshark",
+        "mingw32-libvirt",
+        "mingw64-libvirt"
+      ],
+      "provides": [
+        "libvirt-admin",
+        "libvirt-lock-sanlock"
+      ],
+      "requires": [
+        "libvirt-daemon",
+        "libvirt-daemon-config-network",
+        "libvirt-daemon-config-nwfilter",
+        "libvirt-daemon-driver-libxl",
+        "libvirt-daemon-driver-lxc",
+        "libvirt-daemon-driver-qemu",
+        "libvirt-client-qemu",
+        "libvirt-daemon-driver-vbox",
+        "libvirt-daemon-driver-nwfilter",
+        "libvirt-daemon-driver-interface",
+        "libvirt-daemon-driver-secret",
+        "libvirt-daemon-driver-storage",
+        "libvirt-daemon-driver-network",
+        "libvirt-daemon-driver-nodedev",
+        "libvirt-client",
+        "libvirt-libs",
+        "libvirt-daemon-common",
+        "libvirt-daemon-lock",
+        "libvirt-daemon-plugin-lockd",
+        "libvirt-daemon-log",
+        "libvirt-daemon-proxy",
+        "iproute",
+        "iproute-tc",
+        "polkit",
+        "dmidecode",
+        "systemctl",
+        "dbus",
+        "shadow-utils",
+        "gettext-runtime",
+        "gettext",
+        "dnsmasq",
+        "iptables",
+        "ebtables",
+        "systemd",
+        "module-init-tools",
+        "netcf-libs",
+        "nfs-utils",
+        "util-linux",
+        "qemu-img",
+        "libvirt-daemon-driver-storage-core",
+        "lvm2",
+        "parted",
+        "device-mapper",
+        "iscsi-initiator-utils",
+        "glusterfs-client",
+        "gluster",
+        "zfs",
+        "zpool",
+        "libvirt-daemon-driver-storage-disk",
+        "libvirt-daemon-driver-storage-logical",
+        "libvirt-daemon-driver-storage-scsi",
+        "libvirt-daemon-driver-storage-iscsi",
+        "libvirt-daemon-driver-storage-mpath",
+        "libvirt-daemon-driver-storage-iscsi-direct",
+        "libvirt-daemon-driver-storage-gluster",
+        "libvirt-daemon-driver-storage-rbd",
+        "libvirt-daemon-driver-storage-zfs",
+        "gzip",
+        "bzip2",
+        "lzop",
+        "xz",
+        "systemd-container",
+        "swtpm-tools",
+        "numad",
+        "qemu",
+        "qemu-kvm",
+        "xen",
+        "gnutls-utils",
+        "python3-libvirt",
+        "python3-cryptography",
+        "python3-lxml",
+        "cyrus-sasl",
+        "cyrus-sasl-gssapi",
+        "wireshark",
+        "pkgconfig",
+        "sanlock",
+        "augeas"
+      ]
+    },
+    {
+      "repo": "src-openEuler-memlink",
+      "spec_path": "work/repos/src-openEuler-memlink/memlink.spec",
+      "source_name": "memlinkd",
+      "packages": [
+        "memlinkd"
+      ],
+      "provides": [],
+      "requires": [
+        "libvirt",
+        "libboundscheck",
+        "systemd-units"
+      ]
+    },
+    {
+      "repo": "src-openEuler-obmm",
+      "spec_path": "work/repos/src-openEuler-obmm/obmm.spec",
+      "source_name": "libobmm",
+      "packages": [
+        "libobmm",
+        "libobmm-devel"
+      ],
+      "provides": [],
+      "requires": [
+        "libobmm"
+      ]
+    },
+    {
+      "repo": "src-openEuler-qemu",
+      "spec_path": "work/repos/src-openEuler-qemu/qemu.spec",
+      "source_name": "qemu",
+      "packages": [
+        "qemu",
+        "qemu-block-curl",
+        "qemu-block-iscsi",
+        "qemu-block-rbd",
+        "qemu-block-ssh",
+        "qemu-guest-agent",
+        "qemu-help",
+        "qemu-hw-usb-host",
+        "qemu-img",
+        "qemu-seabios",
+        "qemu-system-aarch64",
+        "qemu-system-arm",
+        "qemu-system-loongarch64",
+        "qemu-system-ppc64",
+        "qemu-system-riscv",
+        "qemu-system-x86_64",
+        "qemu-user",
+        "qemu-user-binfmt",
+        "qemu-user-static"
+      ],
+      "provides": [
+        "qemu-kvm"
+      ],
+      "requires": [
+        "getent",
+        "groupadd",
+        "useradd",
+        "systemd-units",
+        "qemu-block-iscsi",
+        "qemu-block-curl",
+        "qemu-hw-usb-host",
+        "libgcc",
+        "liburing",
+        "qemu",
+        "spice-gtk",
+        "systemd"
+      ]
+    },
+    {
+      "repo": "src-openEuler-sysSentry",
+      "spec_path": "work/repos/src-openEuler-sysSentry/sysSentry.spec",
+      "source_name": "sysSentry",
+      "packages": [
+        "ai_block_io",
+        "avg_block_io",
+        "bmc_block_io",
+        "hbm_online_repair",
+        "libxalarm",
+        "libxalarm-devel",
+        "pysentry_collect",
+        "pysentry_notify",
+        "sentry_msg_monitor",
+        "soc_ring_sentry",
+        "sysSentry"
+      ],
+      "provides": [
+        "bmc_block_io",
+        "hbm_online_repair",
+        "libxalarm",
+        "libxalarm-devel",
+        "pyxalarm",
+        "sentry_msg_monitor",
+        "soc_ring_sentry"
+      ],
+      "requires": [
+        "libbpf",
+        "nvme-cli",
+        "json-c",
+        "sysSentry",
+        "libxalarm",
+        "json-c-devel",
+        "pysentry_notify",
+        "pysentry_collect",
+        "python3-numpy",
+        "libtraceevent",
+        "ipmitool",
+        "lsof",
+        "libobmm"
+      ]
+    },
+    {
+      "repo": "src-openEuler-ubctl",
+      "spec_path": "work/repos/src-openEuler-ubctl/ubctl.spec",
+      "source_name": "ubctl",
+      "packages": [
+        "ubctl",
+        "ubctl-devel"
+      ],
+      "provides": [],
+      "requires": [
+        "libubctl"
+      ]
+    },
+    {
+      "repo": "src-openEuler-ubs-comm",
+      "spec_path": "work/repos/src-openEuler-ubs-comm/hcom.spec",
+      "source_name": "ubs-comm",
+      "packages": [
+        "ubs-comm",
+        "ubs-comm-devel",
+        "ubs-comm-lib"
+      ],
+      "provides": [],
+      "requires": [
+        "libboundscheck",
+        "ubs-comm-lib"
+      ]
+    },
+    {
+      "repo": "src-openEuler-ubs-engine",
+      "spec_path": "work/repos/src-openEuler-ubs-engine/ubs-engine.spec",
+      "source_name": "ubs-engine",
+      "packages": [
+        "python3-ubs-engine",
+        "ubs-engine",
+        "ubs-engine-client-devel",
+        "ubs-engine-client-libs",
+        "ubs-engine-rmrs",
+        "ubs-engine-ucache",
+        "ubs-engine-virtagent"
+      ],
+      "provides": [
+        "libubse-client.so.1",
+        "ubs-engine-client-devel",
+        "ubs-engine-client-libs"
+      ],
+      "requires": [
+        "glibc",
+        "libgcc",
+        "libstdc++",
+        "libboundscheck",
+        "libxml2",
+        "openssl-libs",
+        "cpp-httplib",
+        "ubs-comm-lib",
+        "libobmm",
+        "tar",
+        "systemd",
+        "coreutils",
+        "shadow",
+        "glibc-common",
+        "gawk",
+        "util-linux",
+        "grep",
+        "sed",
+        "ubs-engine-client-libs",
+        "pkgconfig",
+        "ubs-engine"
+      ]
+    },
+    {
+      "repo": "src-openEuler-ubs-mem",
+      "spec_path": "work/repos/src-openEuler-ubs-mem/ubs-mem.spec",
+      "source_name": "ubs-mem",
+      "packages": [
+        "ubs-mem",
+        "ubs-mem-shmem"
+      ],
+      "provides": [
+        "ubs-mem-kshmem"
+      ],
+      "requires": [
+        "ubs-mem-shmem",
+        "glibc",
+        "libgcc",
+        "libstdc++",
+        "libboundscheck",
+        "ubs-comm-lib",
+        "openssl-libs",
+        "ubs-engine",
+        "ubs-engine-client-libs"
+      ]
+    },
+    {
+      "repo": "src-openEuler-ubturbo",
+      "spec_path": "work/repos/src-openEuler-ubturbo/ubturbo.spec",
+      "source_name": "ubturbo",
+      "packages": [
+        "ubturbo",
+        "ubturbo-devel",
+        "ubturbo-rmrs",
+        "ubturbo-smap",
+        "ubturbo-ubdma",
+        "ubturbo-ucache"
+      ],
+      "provides": [
+        "ubturbo"
+      ],
+      "requires": [
+        "kernel",
+        "coreutils",
+        "ubturbo-smap",
+        "ubturbo-rmrs",
+        "ubturbo-ubdma"
+      ]
+    },
+    {
+      "repo": "src-openEuler-ubutils",
+      "spec_path": "work/repos/src-openEuler-ubutils/ubutils.spec",
+      "source_name": "ubutils",
+      "packages": [
+        "ubutils",
+        "ubutils-devel"
+      ],
+      "provides": [],
+      "requires": [
+        "ubutils"
+      ]
+    },
+    {
+      "repo": "src-openEuler-umdk",
+      "spec_path": "work/repos/src-openEuler-umdk/umdk.spec",
+      "source_name": "umdk",
+      "packages": [
+        "umdk",
+        "umdk-dlock-devel",
+        "umdk-dlock-example",
+        "umdk-dlock-lib",
+        "umdk-ums",
+        "umdk-ums-tools",
+        "umdk-urma-bin",
+        "umdk-urma-devel",
+        "umdk-urma-example",
+        "umdk-urma-lib",
+        "umdk-urma-test",
+        "umdk-urma-tools",
+        "umdk-urpc-framework",
+        "umdk-urpc-framework-devel",
+        "umdk-urpc-framework-example",
+        "umdk-urpc-framework-tools",
+        "umdk-urpc-umq",
+        "umdk-urpc-umq-devel",
+        "umdk-urpc-umq-example",
+        "umdk-urpc-umq-tools"
+      ],
+      "provides": [],
+      "requires": [
+        "glibc",
+        "glib2",
+        "libummu",
+        "libasan",
+        "libtsan",
+        "umdk-urma-lib",
+        "umdk-dlock-lib",
+        "umdk-urpc-framework",
+        "umdk-urpc-umq",
+        "umdk-urpc-framework-devel",
+        "umdk-urpc-umq-devel",
+        "libnl3"
+      ]
+    },
+    {
+      "repo": "src-openEuler-ummu",
+      "spec_path": "work/repos/src-openEuler-ummu/ummu.spec",
+      "source_name": "libummu",
+      "packages": [
+        "libummu",
+        "libummu-devel"
+      ],
+      "provides": [],
+      "requires": [
+        "libummu"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+# 当前环境需要升级的包名，每行一个。
+升级包名:
+app
+libfoo
+
+# 升级包文件或目录路径，每行一个。
+# 目录会由 specdeps-reinstall-json 递归扫描 rpm/deb 文件。
+升级包路径:
+/srv/packages
+/srv/extra/libbar-1.0-1.aarch64.rpm
