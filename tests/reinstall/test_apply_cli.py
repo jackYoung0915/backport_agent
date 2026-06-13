@@ -27,6 +27,61 @@ class ApplyReinstallCliTests(unittest.TestCase):
         self.assertIn("DRY-RUN", printed)
         self.assertIn("sudo dnf install -y /mnt/iso/app.rpm", printed)
 
+    def test_dry_run_strips_debian_package_field_prefixes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / "reinstall.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "phase": "uninstall",
+                                "package": "Package: umdk-urma-lib",
+                                "command": ["sudo", "apt-get", "remove", "-y", "Package: umdk-urma-lib"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("specdeps.reinstall.apply_cli.subprocess.run") as run, patch("builtins.print") as print_:
+                from specdeps.reinstall.apply_cli import main
+
+                exit_code = main(["--input", str(plan)])
+
+        self.assertEqual(exit_code, 0)
+        run.assert_not_called()
+        printed = "\n".join(" ".join(str(part) for part in call.args) for call in print_.call_args_list)
+        self.assertIn("umdk-urma-lib: sudo apt-get remove -y umdk-urma-lib", printed)
+        self.assertNotIn("Package:", printed)
+
+    def test_execute_strips_debian_package_field_prefixes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / "reinstall.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "actions": [
+                            {
+                                "phase": "uninstall",
+                                "package": "Package: umdk-urma-lib",
+                                "command": ["sudo", "apt-get", "remove", "-y", "Package: umdk-urma-lib"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("specdeps.reinstall.apply_cli.subprocess.run") as run, patch("builtins.print"):
+                from specdeps.reinstall.apply_cli import main
+
+                exit_code = main(["--input", str(plan), "--execute"])
+
+        self.assertEqual(exit_code, 0)
+        run.assert_called_once_with(["sudo", "apt-get", "remove", "-y", "umdk-urma-lib"], check=True)
+
     def test_execute_runs_commands_in_order_and_stops_on_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             plan = Path(tmp) / "reinstall.json"

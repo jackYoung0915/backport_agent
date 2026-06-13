@@ -54,17 +54,34 @@ def _validated_actions(payload: dict[str, Any]) -> list[dict[str, Any]]:
     actions = payload.get("actions")
     if not isinstance(actions, list):
         raise ValueError("actions must be a list")
+    normalized_actions: list[dict[str, Any]] = []
     for index, action in enumerate(actions):
         if not isinstance(action, dict):
             raise ValueError(f"action {index} must be an object")
         command = action.get("command")
         if not isinstance(command, list) or not command or not all(isinstance(part, str) and part for part in command):
             raise ValueError(f"action {index} command must be a non-empty list of strings")
-    return actions
+        normalized_action = dict(action)
+        package = normalized_action.get("package")
+        if isinstance(package, str):
+            normalized_action["package"] = _strip_package_field_prefix(package)
+        normalized_action["command"] = [_strip_package_field_prefix(part) for part in command]
+        normalized_actions.append(normalized_action)
+    return normalized_actions
 
 
 def _format_command(command: tuple[str, ...] | list[str]) -> str:
     return " ".join(shlex.quote(part) for part in command)
+
+
+def _strip_package_field_prefix(value: str) -> str:
+    stripped = value.strip()
+    for separator in (":", "："):
+        if separator in stripped:
+            field, package_name = stripped.split(separator, 1)
+            if field.strip().lower() == "package" and package_name.strip():
+                return package_name.strip()
+    return value
 
 
 if __name__ == "__main__":
