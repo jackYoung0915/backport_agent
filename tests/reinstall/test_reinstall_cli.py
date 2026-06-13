@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from specdeps.reinstall_cli import main
+from specdeps.reinstall.cli import main
 
 
 class ReinstallCliTests(unittest.TestCase):
@@ -36,7 +36,7 @@ class ReinstallCliTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("specdeps.reinstall_cli.subprocess.run") as run, patch("builtins.print") as print_:
+            with patch("specdeps.reinstall.cli.subprocess.run") as run, patch("builtins.print") as print_:
                 exit_code = main(
                     [
                         "--topology",
@@ -81,7 +81,7 @@ class ReinstallCliTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("specdeps.reinstall_cli.subprocess.run") as run, patch("builtins.print"):
+            with patch("specdeps.reinstall.cli.subprocess.run") as run, patch("builtins.print"):
                 exit_code = main(
                     [
                         "--topology",
@@ -125,7 +125,7 @@ class ReinstallCliTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("specdeps.reinstall_cli.subprocess.run") as run, patch("builtins.print") as print_:
+            with patch("specdeps.reinstall.cli.subprocess.run") as run, patch("builtins.print") as print_:
                 exit_code = main(
                     [
                         "--topology",

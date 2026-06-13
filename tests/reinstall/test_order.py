@@ -1,7 +1,7 @@
 import unittest
 
 from specdeps.models import TopologyData
-from specdeps.order import dependency_closure, install_order, uninstall_order
+from specdeps.reinstall.order import dependency_closure, install_order, uninstall_order
 
 
 class OrderTests(unittest.TestCase):

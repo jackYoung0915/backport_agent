@@ -31,5 +31,13 @@ Beginner workflow:
 2. $VENV_DIR/bin/specdeps-txt-to-json --input reinstall.txt --out config/reinstall-input.json
 3. $VENV_DIR/bin/specdeps-reinstall-json --input config/reinstall-input.json --out out/reinstall.json
 
+ISO workflow:
+1. cp reinstall.iso.example.txt reinstall.txt
+2. $VENV_DIR/bin/specdeps-iso-reinstall --input reinstall.txt --source /mnt/iso --out out/reinstall.json
+3. Review the dry-run output, then rerun with --execute when ready.
+
+Apply an existing reinstall JSON:
+$VENV_DIR/bin/specdeps-apply-reinstall --input out/reinstall.json
+
 This script installs the tool only. It does not run remove/install package commands.
 EOF

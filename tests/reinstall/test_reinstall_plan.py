@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 
 from specdeps.models import PackagePathConfig, TopologyData
-from specdeps.reinstall_plan import build_reinstall_actions, package_extension
+from specdeps.reinstall.plan import build_reinstall_actions, package_extension
 
 
 class ReinstallPlanTests(unittest.TestCase):

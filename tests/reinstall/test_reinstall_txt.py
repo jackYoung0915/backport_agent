@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from specdeps.reinstall_txt import parse_reinstall_txt
+from specdeps.reinstall.txt_input import parse_package_only_txt, parse_reinstall_txt
 
 
 class ReinstallTxtTests(unittest.TestCase):
@@ -84,6 +84,24 @@ class ReinstallTxtTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown section header"):
             parse_reinstall_txt(text)
 
+    def test_parses_package_only_chinese_sections(self):
+        payload = parse_package_only_txt("升级包名:\napp\nlibfoo\n")
+
+        self.assertEqual(payload, ["app", "libfoo"])
+
+    def test_parses_package_only_english_sections(self):
+        payload = parse_package_only_txt("packages:\napp\nlibfoo\n")
+
+        self.assertEqual(payload, ["app", "libfoo"])
+
+    def test_package_only_rejects_empty_package_section(self):
+        with self.assertRaisesRegex(ValueError, "package section is empty"):
+            parse_package_only_txt("packages:\n")
+
+    def test_package_only_rejects_unknown_header(self):
+        with self.assertRaisesRegex(ValueError, "unknown section header"):
+            parse_package_only_txt("paths:\n/mnt/iso\n")
+
 
 class ReinstallTxtCliTests(unittest.TestCase):
     def test_cli_writes_json(self):
@@ -93,7 +111,7 @@ class ReinstallTxtCliTests(unittest.TestCase):
             out_path = root / "config" / "reinstall-input.json"
             input_path.write_text("packages:\napp\n\npaths:\n/srv/packages\n", encoding="utf-8")
 
-            from specdeps.reinstall_txt_cli import main
+            from specdeps.reinstall.txt_cli import main
 
             exit_code = main(["--input", str(input_path), "--out", str(out_path)])
 
@@ -109,7 +127,7 @@ class ReinstallTxtCliTests(unittest.TestCase):
             stderr = io.StringIO()
 
             with patch("sys.stderr", stderr), self.assertRaises(SystemExit) as error:
-                from specdeps.reinstall_txt_cli import main
+                from specdeps.reinstall.txt_cli import main
 
                 main(["--input", str(input_path)])
 

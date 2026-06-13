@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from specdeps.package_config import load_package_config
+from specdeps.reinstall.package_config import load_package_config
 
 
 class PackageConfigTests(unittest.TestCase):

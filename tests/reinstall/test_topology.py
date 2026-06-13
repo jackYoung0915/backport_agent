@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from specdeps.topology import load_topology
+from specdeps.reinstall.topology import load_topology
 
 
 class TopologyTests(unittest.TestCase):

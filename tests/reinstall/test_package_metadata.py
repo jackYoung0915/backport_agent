@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from specdeps.package_metadata import PackageMetadata, load_package_metadata
+from specdeps.reinstall.package_metadata import PackageMetadata, load_package_metadata
 
 
 class PackageMetadataTests(unittest.TestCase):
@@ -17,7 +17,7 @@ class PackageMetadataTests(unittest.TestCase):
                 stdout="NAME\napp\nPROVIDES\napp\napp-virtual\nREQUIRES\nlibfoo = 1.0\n/usr/bin/sh\nrpmlib(PayloadFilesHavePrefix)\n",
             )
 
-        with patch("specdeps.package_metadata.subprocess.run", side_effect=fake_run):
+        with patch("specdeps.reinstall.package_metadata.subprocess.run", side_effect=fake_run):
             metadata = load_package_metadata(Path("/packages/app-1.rpm"), "rpm")
 
         self.assertEqual(
@@ -32,22 +32,27 @@ class PackageMetadataTests(unittest.TestCase):
 
     def test_loads_deb_metadata_and_normalizes_dependencies(self):
         def fake_run(command, check, stdout, text):
-            self.assertEqual(command, ["dpkg-deb", "-f", "/packages/app.deb", "Package", "Provides", "Depends", "Pre-Depends"])
+            self.assertEqual(
+                command,
+                ["dpkg-deb", "-f", "/packages/app.deb", "Package", "Provides", "Depends", "Pre-Depends", "Version", "Architecture"],
+            )
             return subprocess.CompletedProcess(
                 command,
                 0,
-                stdout="app\napp-virtual\nlibfoo (>= 1.0), libc6 | libc6.1\nbase-files\n",
+                stdout="app\napp-virtual\nlibfoo (>= 1.0), libc6 | libc6.1\nbase-files\n1.0-1\namd64\n",
             )
 
-        with patch("specdeps.package_metadata.subprocess.run", side_effect=fake_run):
+        with patch("specdeps.reinstall.package_metadata.subprocess.run", side_effect=fake_run):
             metadata = load_package_metadata(Path("/packages/app.deb"), "deb")
 
         self.assertEqual(metadata.name, "app")
         self.assertEqual(metadata.provides, ("app", "app-virtual"))
         self.assertEqual(metadata.requires, ("libfoo", "libc6", "libc6.1", "base-files"))
+        self.assertEqual(metadata.version, "1.0-1")
+        self.assertEqual(metadata.arch, "amd64")
 
     def test_reports_missing_metadata_tool(self):
-        with patch("specdeps.package_metadata.subprocess.run", side_effect=FileNotFoundError):
+        with patch("specdeps.reinstall.package_metadata.subprocess.run", side_effect=FileNotFoundError):
             with self.assertRaisesRegex(RuntimeError, "rpm command not found"):
                 load_package_metadata(Path("/packages/app.rpm"), "rpm")
 

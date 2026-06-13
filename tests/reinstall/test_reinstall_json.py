@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from specdeps.package_metadata import PackageMetadata
-from specdeps.reinstall_json import build_reinstall_json, discover_upgrade_artifacts, load_reinstall_input
+from specdeps.reinstall.package_metadata import PackageMetadata
+from specdeps.reinstall.json_plan import build_reinstall_json, discover_upgrade_artifacts, load_reinstall_input
 
 
 class ReinstallJsonTests(unittest.TestCase):
@@ -150,8 +150,8 @@ class ReinstallJsonCliTests(unittest.TestCase):
                 requires=(),
             )
 
-            with patch("specdeps.reinstall_json_cli.load_package_metadata", return_value=metadata):
-                from specdeps.reinstall_json_cli import main
+            with patch("specdeps.reinstall.json_cli.load_package_metadata", return_value=metadata):
+                from specdeps.reinstall.json_cli import main
 
                 exit_code = main(["--input", str(input_path), "--out", str(out_path)])
 
@@ -170,7 +170,7 @@ class ReinstallJsonCliTests(unittest.TestCase):
             stderr = __import__("io").StringIO()
 
             with patch("sys.stderr", stderr), self.assertRaises(SystemExit) as error:
-                from specdeps.reinstall_json_cli import main
+                from specdeps.reinstall.json_cli import main
 
                 main(["--input", str(input_path)])
 

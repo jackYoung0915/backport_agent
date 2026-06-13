@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from specdeps.package_files import discover_package_files
+from specdeps.reinstall.package_files import discover_package_files
 
 
 class PackageFileTests(unittest.TestCase):
