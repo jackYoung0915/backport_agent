@@ -1,6 +1,5 @@
 import io
 import json
-import os
 import stat
 import tempfile
 import unittest
@@ -93,6 +92,37 @@ class ReinstallTxtTests(unittest.TestCase):
         payload = parse_package_only_txt("packages:\napp\nlibfoo\n")
 
         self.assertEqual(payload, ["app", "libfoo"])
+
+    def test_package_sections_accept_debian_control_package_fields(self):
+        text = """
+        packages:
+        Package: umdk-urma-lib
+        Version: 1.0-1
+        Architecture: amd64
+        Package：umdk-tools
+        Depends: libc6
+
+        paths:
+        /srv/packages
+        """
+
+        payload = parse_reinstall_txt(text)
+
+        self.assertEqual(payload["upgrade_packages"], ["umdk-urma-lib", "umdk-tools"])
+        self.assertEqual(payload["upgrade_paths"], ["/srv/packages"])
+
+    def test_package_only_accepts_debian_control_package_fields(self):
+        text = """
+        packages:
+        Package: umdk-urma-lib
+        Version: 1.0-1
+        Architecture: amd64
+        Package：umdk-tools
+        """
+
+        payload = parse_package_only_txt(text)
+
+        self.assertEqual(payload, ["umdk-urma-lib", "umdk-tools"])
 
     def test_package_only_rejects_empty_package_section(self):
         with self.assertRaisesRegex(ValueError, "package section is empty"):

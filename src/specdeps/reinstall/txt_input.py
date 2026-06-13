@@ -3,6 +3,31 @@ from __future__ import annotations
 
 PACKAGE_HEADERS = {"升级包名", "包名", "packages", "package", "upgrade_packages", "upgrade packages"}
 PATH_HEADERS = {"升级包路径", "包路径", "路径", "paths", "path", "upgrade_paths", "upgrade paths"}
+IGNORED_PACKAGE_FIELDS = {
+    "architecture",
+    "breaks",
+    "conflicts",
+    "depends",
+    "description",
+    "filename",
+    "homepage",
+    "installed-size",
+    "maintainer",
+    "md5sum",
+    "pre-depends",
+    "priority",
+    "provides",
+    "recommends",
+    "replaces",
+    "section",
+    "sha1",
+    "sha256",
+    "size",
+    "source",
+    "status",
+    "suggests",
+    "version",
+}
 
 
 def parse_reinstall_txt(text: str) -> dict[str, list[str]]:
@@ -31,7 +56,9 @@ def parse_reinstall_txt(text: str) -> dict[str, list[str]]:
             raise ValueError(f"unknown section header on line {line_number}: {header}")
 
         if current == "packages":
-            packages.append(line)
+            package = _package_line_value(line)
+            if package:
+                packages.append(package)
         elif current == "paths":
             paths.append(line)
         else:
@@ -73,7 +100,9 @@ def parse_package_only_txt(text: str) -> list[str]:
             raise ValueError(f"unknown section header on line {line_number}: {header}")
 
         if current == "packages":
-            packages.append(line)
+            package = _package_line_value(line)
+            if package:
+                packages.append(package)
         else:
             raise ValueError(f"value before section header on line {line_number}: {line}")
 
@@ -95,6 +124,27 @@ def _header_name(line: str) -> str:
 
 def _normalize_header(header: str) -> str:
     return " ".join(header.strip().lower().split())
+
+
+def _package_line_value(line: str) -> str:
+    field, value = _split_field(line)
+    normalized_field = _normalize_header(field)
+    if normalized_field == "package":
+        return value
+    if normalized_field in IGNORED_PACKAGE_FIELDS:
+        return ""
+    return line
+
+
+def _split_field(line: str) -> tuple[str, str]:
+    for separator in (":", "："):
+        if separator in line:
+            field, value = line.split(separator, 1)
+            field = field.strip()
+            value = value.strip()
+            if field and value:
+                return field, value
+    return "", ""
 
 
 def _dedupe(values: list[str]) -> list[str]:
