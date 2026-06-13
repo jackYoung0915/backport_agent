@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.5",
+  "checkpoint_id": "5069c09c58cf",
+  "strategy": "manual-commit",
+  "branch": "codex/reinstall-json-onboarding",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "src/specdeps/reinstall/apply_cli.py",
+    "tests/reinstall/test_apply_cli.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/50/69c09c58cf/0/metadata.json",
+      "transcript": "/50/69c09c58cf/0/full.jsonl",
+      "content_hash": "/50/69c09c58cf/0/content_hash.txt",
+      "prompt": "/50/69c09c58cf/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6638723,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 5851264,
+    "output_tokens": 53837,
+    "api_call_count": 63
+  }
+}
