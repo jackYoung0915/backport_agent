@@ -1,0 +1,44 @@
+[
+  {
+    "url": "https://gitcode.com/kunpengcompute/src-openEuler-umdk/tree/openEuler-24.03-LTS-SP3_velinux"
+  },
+  {
+    "url": "https://gitcode.com/kunpengcompute/src-openEuler-ubs-engine/tree/openEuler-24.03-LTS-SP3_velinux_poc"
+  },
+  {
+    "url": "https://gitcode.com/kunpengcompute/src-openEuler-ubturbo/tree/openEuler-24.03-LTS-SP3_velinux_poc"
+  },
+  {
+    "url": "https://gitcode.com/kunpengcompute/src-openEuler-libvirt/tree/openEuler-24.03-LTS-SP3_velinux"
+  },
+  {
+    "url": "https://gitcode.com/kunpengcompute/src-openEuler-memlink/tree/openEuler-24.03-LTS-SP3_velinux"
+  },
+  {
+    "url": "https://gitcode.com/kunpengcompute/src-openEuler-qemu/tree/openEuler-24.03-LTS-SP3_velinux"
+  },
+  {
+    "url": "https://gitcode.com/kunpengcompute/src-openEuler-ubs-comm/tree/openEuler-24.03-LTS-SP3_velinux"
+  },
+  {
+    "url": "https://gitcode.com/kunpengcompute/src-openEuler-ubs-mem/tree/openEuler-24.03-LTS-SP3_velinux"
+  },
+  {
+    "url": "https://gitcode.com/kunpengcompute/src-openEuler-obmm/tree/openEuler-24.03-LTS-SP3_velinux"
+  },
+  {
+    "url": "https://gitcode.com/kunpengcompute/src-openEuler-ubutils/tree/openEuler-24.03-LTS-SP3_velinux"
+  },
+  {
+    "url": "https://gitcode.com/kunpengcompute/src-openEuler-ubctl/tree/openEuler-24.03-LTS-SP3_velinux"
+  },
+  {
+    "url": "https://gitcode.com/kunpengcompute/src-openEuler-ummu/tree/openEuler-24.03-LTS-SP3_velinux"
+  },
+  {
+    "url": "https://gitcode.com/kunpengcompute/src-openEuler-cdma/tree/openEuler-24.03-LTS-SP3_velinux"
+  },
+  {
+    "url": "https://gitcode.com/kunpengcompute/src-openEuler-sysSentry/tree/openEuler-24.03-LTS-SP3_velinux"
+  }
+]

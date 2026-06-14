@@ -1,0 +1,11 @@
+{
+  "manager": "dnf",
+  "sudo": true,
+  "package_dirs": {
+    "src-openEuler-cdma": ["/path/to/new-packages/cdma"],
+    "src-openEuler-ummu": ["/path/to/new-packages/ummu"]
+  },
+  "package_names": {
+    "src-openEuler-cdma": ["libcdma", "libcdma-devel"]
+  }
+}

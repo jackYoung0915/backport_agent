@@ -1,0 +1,4 @@
+{
+  "upgrade_packages": ["app", "libfoo"],
+  "upgrade_paths": ["/srv/packages", "/srv/extra/libbar-1.0-1.aarch64.rpm"]
+}

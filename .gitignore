@@ -1,9 +1,11 @@
 .venv/
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+.DS_Store
+work/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .entire/
 .cursor/hooks.json
+

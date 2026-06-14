@@ -1,0 +1,29 @@
+digraph install_dependencies {
+    rankdir=LR;
+    "src-openEuler-cdma";
+    "src-openEuler-libvirt";
+    "src-openEuler-memlink";
+    "src-openEuler-obmm";
+    "src-openEuler-qemu";
+    "src-openEuler-sysSentry";
+    "src-openEuler-ubctl";
+    "src-openEuler-ubs-comm";
+    "src-openEuler-ubs-engine";
+    "src-openEuler-ubs-mem";
+    "src-openEuler-ubturbo";
+    "src-openEuler-ubutils";
+    "src-openEuler-umdk";
+    "src-openEuler-ummu";
+    "src-openEuler-cdma" -> "src-openEuler-ummu" [label="libummu"];
+    "src-openEuler-libvirt" -> "src-openEuler-qemu" [label="qemu"];
+    "src-openEuler-libvirt" -> "src-openEuler-qemu" [label="qemu-img"];
+    "src-openEuler-libvirt" -> "src-openEuler-qemu" [label="qemu-kvm"];
+    "src-openEuler-memlink" -> "src-openEuler-libvirt" [label="libvirt"];
+    "src-openEuler-sysSentry" -> "src-openEuler-obmm" [label="libobmm"];
+    "src-openEuler-ubs-engine" -> "src-openEuler-obmm" [label="libobmm"];
+    "src-openEuler-ubs-engine" -> "src-openEuler-ubs-comm" [label="ubs-comm-lib"];
+    "src-openEuler-ubs-mem" -> "src-openEuler-ubs-comm" [label="ubs-comm-lib"];
+    "src-openEuler-ubs-mem" -> "src-openEuler-ubs-engine" [label="ubs-engine"];
+    "src-openEuler-ubs-mem" -> "src-openEuler-ubs-engine" [label="ubs-engine-client-libs"];
+    "src-openEuler-umdk" -> "src-openEuler-ummu" [label="libummu"];
+}
