@@ -7,12 +7,12 @@ dependencies = []
 
 [project.scripts]
 specdeps = "specdeps.cli:main"
-specdeps-reinstall = "specdeps.reinstall_cli:main"
-specdeps-reinstall-json = "specdeps.reinstall_json_cli:main"
-specdeps-txt-to-json = "specdeps.reinstall_txt_cli:main"
-specdeps-iso-reinstall = "specdeps.reinstall_iso_cli:main"
-specdeps-apply-reinstall = "specdeps.reinstall_apply_cli:main"
-specdeps-source-reinstall = "specdeps.reinstall_source_cli:main"
+specdeps-reinstall = "specdeps.reinstall.cli:main"
+specdeps-reinstall-json = "specdeps.reinstall.json_cli:main"
+specdeps-txt-to-json = "specdeps.reinstall.txt_cli:main"
+specdeps-iso-reinstall = "specdeps.reinstall.iso_cli:main"
+specdeps-apply-reinstall = "specdeps.reinstall.apply_cli:main"
+specdeps-source-reinstall = "specdeps.reinstall.source_cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
