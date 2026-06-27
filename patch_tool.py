@@ -991,12 +991,22 @@ def cmd_check(args: argparse.Namespace) -> int:
 
     repo_names = {str(r["name"]) for r in repos_config} if repos_config else set()
     input_lines: List[str] = []
+    seen_lines: Set[str] = set()
+    duplicates_removed = 0
     with open(inp, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
             t = line.strip()
             if not t:
                 continue
+            # 去重：跳过完全相同的输入行
+            if t in seen_lines:
+                duplicates_removed += 1
+                continue
+            seen_lines.add(t)
             input_lines.append(t)
+
+    if duplicates_removed > 0:
+        logging.info(f"检测到并去除了 {duplicates_removed} 条重复的输入行")
 
     input_entries = _parse_check_input_entries(input_lines, repo_names)
 
