@@ -1,12 +1,25 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .package_metadata import PackageMetadata
+
+
+# A selected package name should never carry a leading Debian control label such
+# as "Package: foo". Users only type the bare name, and provider_index keys are
+# clean names read from dpkg-deb/rpm. Strip the label so a stray "Package:"
+# prefix (from hand-edited or legacy input JSON) still matches.
+_PACKAGE_PREFIX_RE = re.compile(r"^\s*package\s*[:：]\s*", re.IGNORECASE)
+
+
+def normalize_selected_package(name: str) -> str:
+    """Remove an accidental "Package:" control-label prefix from a name."""
+    return _PACKAGE_PREFIX_RE.sub("", name, count=1).strip()
 
 
 @dataclass(frozen=True)
@@ -62,6 +75,10 @@ def build_reinstall_json(
         raise ValueError("package format must be rpm or deb")
     if not selected_packages:
         raise ValueError("upgrade_packages must be non-empty")
+
+    selected_packages = tuple(
+        normalize_selected_package(name) for name in selected_packages
+    )
 
     metadata_by_name = {package.name: package for package in packages}
     provider_index: dict[str, str] = {}

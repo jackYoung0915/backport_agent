@@ -84,6 +84,24 @@ class ReinstallJsonTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "upgrade package not found"):
             build_reinstall_json(("app",), packages, "rpm")
 
+    def test_strips_accidental_package_label_from_selected_names(self):
+        # provider_index keys are clean names from dpkg-deb/rpm; a selected name
+        # carrying a stray "Package:" label must still match rather than raise
+        # "upgrade package not found".
+        packages = [
+            PackageMetadata(
+                name="app",
+                artifact=Path("/packages/app.deb"),
+                provides=("app",),
+                requires=(),
+            )
+        ]
+
+        for selected in ("Package: app", "Package：app", "package:app"):
+            with self.subTest(selected=selected):
+                payload = build_reinstall_json((selected,), packages, "deb")
+                self.assertEqual(payload["selected_packages"], ["app"])
+
     def test_discovers_upgrade_artifacts_from_files_and_dirs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

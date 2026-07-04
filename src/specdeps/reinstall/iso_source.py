@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .json_plan import build_reinstall_json, discover_upgrade_artifacts
+from .json_plan import build_reinstall_json, discover_upgrade_artifacts, normalize_selected_package
 from .package_metadata import PackageMetadata, load_package_metadata
 
 
@@ -34,6 +34,7 @@ def select_requested_packages(
 ) -> list[PackageMetadata]:
     selected: list[PackageMetadata] = []
     for requested in selected_packages:
+        requested = normalize_selected_package(requested)
         candidates = [package for package in packages if package.name == requested]
         if not candidates:
             candidates = [package for package in packages if requested in package.provides]
