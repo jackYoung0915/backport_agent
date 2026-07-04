@@ -111,6 +111,46 @@ class ReinstallTxtTests(unittest.TestCase):
         self.assertEqual(payload["upgrade_packages"], ["umdk-urma-lib", "umdk-tools"])
         self.assertEqual(payload["upgrade_paths"], ["/srv/packages"])
 
+    def test_package_sections_ignore_arbitrary_control_fields(self):
+        # A full "dpkg -I" / "apt show" stanza contains many fields. Only
+        # "Package:" should contribute a name; every other control field must
+        # be ignored rather than leaking in as a bogus package.
+        text = """
+        packages:
+        Package: umdk-urma-lib
+        Version: 1.0-1
+        Architecture: amd64
+        Multi-Arch: same
+        Origin: ubuntu
+        Original-Maintainer: Foo <foo@bar>
+        Depends: libc6
+        Description: some lib
+        Package: umdk-tools
+
+        paths:
+        /srv/packages
+        """
+
+        payload = parse_reinstall_txt(text)
+
+        self.assertEqual(payload["upgrade_packages"], ["umdk-urma-lib", "umdk-tools"])
+
+    def test_package_sections_preserve_arch_qualified_names(self):
+        # An architecture-qualified name uses a colon with no following space
+        # and must be kept verbatim rather than parsed as a control field.
+        text = """
+        packages:
+        app
+        libfoo:amd64
+
+        paths:
+        /srv/packages
+        """
+
+        payload = parse_reinstall_txt(text)
+
+        self.assertEqual(payload["upgrade_packages"], ["app", "libfoo:amd64"])
+
     def test_package_only_accepts_debian_control_package_fields(self):
         text = """
         packages:

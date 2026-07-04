@@ -1,33 +1,18 @@
 from __future__ import annotations
 
+import re
+
 
 PACKAGE_HEADERS = {"升级包名", "包名", "packages", "package", "upgrade_packages", "upgrade packages"}
 PATH_HEADERS = {"升级包路径", "包路径", "路径", "paths", "path", "upgrade_paths", "upgrade paths"}
-IGNORED_PACKAGE_FIELDS = {
-    "architecture",
-    "breaks",
-    "conflicts",
-    "depends",
-    "description",
-    "filename",
-    "homepage",
-    "installed-size",
-    "maintainer",
-    "md5sum",
-    "pre-depends",
-    "priority",
-    "provides",
-    "recommends",
-    "replaces",
-    "section",
-    "sha1",
-    "sha256",
-    "size",
-    "source",
-    "status",
-    "suggests",
-    "version",
-}
+
+# A Debian/RPM control field line looks like "Field: value". Field names follow
+# Debian syntax (start with a letter/digit, then letters/digits/hyphens). We
+# require whitespace after an ASCII colon so that architecture-qualified names
+# such as "libfoo:amd64" are preserved as package tokens rather than parsed as
+# a field. A full-width colon (common in Chinese-locale pastes) is always
+# treated as a field separator.
+_CONTROL_FIELD_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9-]*):\s+(.*)$")
 
 
 def parse_reinstall_txt(text: str) -> dict[str, list[str]]:
@@ -127,24 +112,40 @@ def _normalize_header(header: str) -> str:
 
 
 def _package_line_value(line: str) -> str:
+    """Return the package name for a line inside a package section.
+
+    Bare tokens (``app``, ``libfoo:amd64``) are returned unchanged. Debian/RPM
+    control fields are recognised generically: only ``Package:`` contributes a
+    name; every other field (``Version:``, ``Architecture:``, ``Multi-Arch:``,
+    ...) is ignored so pasting a full control stanza does not leak field lines
+    into the package list.
+    """
     field, value = _split_field(line)
-    normalized_field = _normalize_header(field)
-    if normalized_field == "package":
+    if field is None:
+        return line
+    if _normalize_header(field) == "package":
         return value
-    if normalized_field in IGNORED_PACKAGE_FIELDS:
-        return ""
-    return line
+    return ""
 
 
-def _split_field(line: str) -> tuple[str, str]:
-    for separator in (":", "："):
-        if separator in line:
-            field, value = line.split(separator, 1)
-            field = field.strip()
-            value = value.strip()
-            if field and value:
-                return field, value
-    return "", ""
+def _split_field(line: str) -> tuple[str | None, str]:
+    """Split a control field line into ``(field, value)``.
+
+    Returns ``(None, "")`` when the line is not a ``Field: value`` control line
+    (i.e. it is a bare package token).
+    """
+    full_width_index = line.find("：")
+    if full_width_index != -1:
+        field = line[:full_width_index].strip()
+        value = line[full_width_index + 1:].strip()
+        if field:
+            return field, value
+        return None, ""
+
+    match = _CONTROL_FIELD_RE.match(line)
+    if match:
+        return match.group(1).strip(), match.group(2).strip()
+    return None, ""
 
 
 def _dedupe(values: list[str]) -> list[str]:
