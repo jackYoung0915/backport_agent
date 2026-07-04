@@ -620,6 +620,7 @@ def check_commits(
     branch: Optional[str] = None,
     long_hash: bool = False,
     repos: Optional[List[Dict[str, Any]]] = None,
+    sort_results: bool = True,
 ) -> Dict[str, Any]:
     """检查提交列表是否已合入目标分支，返回结构化结果。
 
@@ -629,6 +630,8 @@ def check_commits(
         branch: 目标分支（None 表示当前分支）。
         long_hash: 结果使用 40 位完整 hash。
         repos: 多仓库配置；每项包含 name/path/branch。
+        sort_results: 若为 True（默认）按 describe 合入序排序输出；
+            若为 False 则保持输入顺序，使输入与输出的提交一一对应在同一位置。
 
     Returns:
         {"total", "matched", "unmatched", "results": [{...}]}
@@ -742,7 +745,7 @@ def check_commits(
         "total": len(input_entries),
         "matched": n_matched,
         "unmatched": len(input_entries) - n_matched,
-        "results": _sort_check_rows(raw),
+        "results": _sort_check_rows(raw) if sort_results else [r for _, r in raw],
     }
     if n_title_match or n_hash_match:
         result["title_matched"] = n_title_match
@@ -1031,6 +1034,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         branch=args.branch,
         long_hash=args.long_hash,
         repos=repos_config,
+        sort_results=not args.no_sort,
     )
 
     for repo_error in result.get("repo_errors", []):
@@ -1102,7 +1106,8 @@ def cmd_check(args: argparse.Namespace) -> int:
                     f"{commit_time}|{lines_changed_text}\n"
                 )
 
-    logging.info(f"检查完成，结果已保存到 {out}（优先按 describe 合入序排序）")
+    order_desc = "保持输入顺序" if args.no_sort else "优先按 describe 合入序排序"
+    logging.info(f"检查完成，结果已保存到 {out}（{order_desc}）")
     return 0
 
 
@@ -1478,6 +1483,11 @@ def main() -> int:
         "--include-repo",
         action="store_true",
         help="输出扩展 7 列并在 commit_id 前增加命中仓库名（默认保持 6 列兼容输出）",
+    )
+    p_check.add_argument(
+        "--no-sort",
+        action="store_true",
+        help="不按 describe 合入序排序，保持输入顺序，使输入与输出的提交位置一一对应",
     )
     p_check.set_defaults(func=cmd_check)
 
