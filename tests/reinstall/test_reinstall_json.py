@@ -1,11 +1,26 @@
 import json
+import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from specdeps.reinstall.package_metadata import PackageMetadata
+from specdeps.reinstall.package_metadata import PackageMetadata, load_package_metadata
 from specdeps.reinstall.json_plan import build_reinstall_json, discover_upgrade_artifacts, load_reinstall_input
+
+
+def _find_lintian_deb() -> Path | None:
+    override = os.environ.get("LINTIAN_DEB")
+    if override:
+        candidate = Path(override)
+        return candidate if candidate.is_file() else None
+    for directory in (Path("/home/debs"), Path("/var/cache/apt/archives")):
+        if directory.is_dir():
+            matches = sorted(directory.glob("lintian_*.deb"))
+            if matches:
+                return matches[0]
+    return None
 
 
 class ReinstallJsonTests(unittest.TestCase):
@@ -195,6 +210,48 @@ class ReinstallJsonCliTests(unittest.TestCase):
         self.assertEqual(error.exception.code, 2)
         self.assertIn("does not exist", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
+
+
+@unittest.skipUnless(shutil.which("dpkg-deb"), "dpkg-deb is required for real .deb integration test")
+class ReinstallJsonLintianIntegrationTests(unittest.TestCase):
+    """Full pipeline against a real lintian .deb: discover -> metadata -> JSON."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.deb = _find_lintian_deb()
+        if cls.deb is None:
+            raise unittest.SkipTest(
+                "no lintian .deb found; run 'apt-get download lintian' into /home/debs "
+                "or set LINTIAN_DEB"
+            )
+
+    def test_builds_reinstall_json_for_real_lintian_package(self):
+        package_format, artifacts = discover_upgrade_artifacts((self.deb,))
+        self.assertEqual(package_format, "deb")
+        metadata = [load_package_metadata(artifact, package_format) for artifact in artifacts]
+
+        payload = build_reinstall_json(
+            ("lintian",), metadata, package_format, include_available_dependencies=False,
+        )
+
+        self.assertEqual(payload["selected_packages"], ["lintian"])
+        self.assertEqual(payload["manager"], "apt")
+        self.assertEqual(payload["order"]["install"], ["lintian"])
+        lintian_record = next(p for p in payload["packages"] if p["name"] == "lintian")
+        self.assertEqual(lintian_record["artifact"], str(self.deb))
+
+    def test_stray_package_prefix_still_resolves_against_real_metadata(self):
+        # Reproduces the original "找不到包" report: a selected name carrying a
+        # "Package:" label must resolve against provider_index keyed by the real
+        # (clean) package name.
+        package_format, artifacts = discover_upgrade_artifacts((self.deb,))
+        metadata = [load_package_metadata(artifact, package_format) for artifact in artifacts]
+
+        payload = build_reinstall_json(
+            ("Package: lintian",), metadata, package_format, include_available_dependencies=False,
+        )
+
+        self.assertEqual(payload["selected_packages"], ["lintian"])
 
 
 if __name__ == "__main__":

@@ -86,23 +86,49 @@ def _load_deb_metadata(path: Path) -> PackageMetadata:
     except subprocess.CalledProcessError as error:
         raise RuntimeError(f"failed to read DEB metadata from {path}") from error
 
-    lines = result.stdout.splitlines()
-    name = lines[0].strip() if lines else ""
+    # When more than one field is requested, "dpkg-deb -f" emits a control
+    # stanza ("Field: value") and omits fields that are absent. Parse by field
+    # name rather than by line position so missing/reordered fields do not shift
+    # the label text (e.g. "Package: ...") into the value.
+    control = _parse_deb_control(result.stdout)
+    name = control.get("package", "").strip()
     if not name:
         raise ValueError(f"{path} did not report a package name")
-    provides = _dedupe([name] + _parse_deb_dependency_field(lines[1] if len(lines) > 1 else ""))
+    provides = _dedupe([name] + _parse_deb_dependency_field(control.get("provides", "")))
     requires = _dedupe(
-        _parse_deb_dependency_field(lines[2] if len(lines) > 2 else "")
-        + _parse_deb_dependency_field(lines[3] if len(lines) > 3 else "")
+        _parse_deb_dependency_field(control.get("depends", ""))
+        + _parse_deb_dependency_field(control.get("pre-depends", ""))
     )
     return PackageMetadata(
         name=name,
         artifact=path,
         provides=tuple(provides),
         requires=tuple(requires),
-        version=lines[4].strip() if len(lines) > 4 else "",
-        arch=lines[5].strip() if len(lines) > 5 else "",
+        version=control.get("version", "").strip(),
+        arch=control.get("architecture", "").strip(),
     )
+
+
+def _parse_deb_control(output: str) -> dict[str, str]:
+    """Parse a Debian control stanza into a lowercased field -> value map.
+
+    Handles folded continuation lines (lines beginning with whitespace belong to
+    the preceding field). Field names are matched case-insensitively.
+    """
+    fields: dict[str, str] = {}
+    current: str | None = None
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        if line[0] in " \t" and current is not None:
+            fields[current] = (fields[current] + " " + line.strip()).strip()
+            continue
+        key, separator, value = line.partition(":")
+        if not separator:
+            continue
+        current = key.strip().lower()
+        fields[current] = value.strip()
+    return fields
 
 
 def _metadata_value(sections: dict[str, list[str]], key: str) -> str:
