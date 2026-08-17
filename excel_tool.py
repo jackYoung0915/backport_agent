@@ -18,15 +18,24 @@ Excel 表格换行单元格拆行工具。
 
   Commit信息 原始内容按分号分隔字段，导出时只保留 commit hash 和
   commit title，格式为 12 位 hash、四个空格和 title。
+
+内核补丁映射：
+  python3 excel_tool.py map-patches INPUT OUTPUT --oe-repo OE_REPO
+      --upstream-repo UPSTREAM_REPO [--oe-ref OLK-6.6]
+      [--upstream-ref master] [--product-version 950]
 """
 
 import argparse
+import io
 import logging
+import os
+import re
 import sys
+import tempfile
 from copy import copy
 from pathlib import Path
 from time import monotonic
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 
 SUPPORTED_SUFFIXES = (".xlsx", ".xlsm")
@@ -34,7 +43,115 @@ DEFAULT_PROGRESS_INTERVAL = 10000
 COMMIT_INFO_HEADER = "Commit信息"
 COMMIT_EXPORT_SEPARATOR = "    "
 
+MAP_PATCHES_SHEET = "全量补丁"
+MAP_PATCHES_HEADERS = [
+    "概述(SR粒度)", "功能介绍(AR粒度)", "关联社区Issue", "补丁类型",
+    "产品版本", "用户态/内核态", "补丁模块", "Commit OE", "Commit ID OE",
+    "PR前、后置补丁", "OE Merge tag", "OE PR", "Commit upstream",
+    "upstream Merge tag", "唯一标识符", "是否需要合入", "客户影响",
+    "华为合入状态", "客户合入状态", "合入版本", "OS发布版本",
+]
+MAP_KERNEL_COMMUNITIES = {
+    "合入openEuler olk内核社区版本",
+    "合入上游linux内核社区版本",
+}
+MAP_REQUIRED_HEADERS = (
+    "SR描述", "AR编号", "AR子编号", "标题描述", "版本模块",
+    COMMIT_INFO_HEADER, "社区类型", "社区链接", "客户影响",
+)
+MAP_COMMIT_START_RE = re.compile(r"(?m)^[ \t]*([0-9a-fA-F]{7,40});")
+MAP_HASH_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+MAP_PR_RE = re.compile(
+    r"^https?://(?:www\.)?(?:gitcode\.com|gitee\.com|atomgit\.com)"
+    r"/openeuler/kernel/(?:-\/)?(?:pull|pulls|merge_requests)/(\d+)(?:/.*)?$",
+    re.IGNORECASE,
+)
+
 LOG = logging.getLogger(__name__)
+
+
+def _mapping_text(value: Any) -> str:
+    """返回用于映射的清理后文本。"""
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _mapping_source_text(value: Any) -> str:
+    """返回需原样写入目标工作簿的源单元格文本。"""
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _normalize_mapping_title(value: Any) -> str:
+    """折叠 commit title 中的换行和连续空白。"""
+    return re.sub(r"\s+", " ", _mapping_text(value))
+
+
+def _parse_mapping_commit_records(value: Any) -> Tuple[List[Dict[str, str]], int]:
+    """解析 Commit信息 单元格中的多条 commit 记录。
+
+    记录以行首的 ``hash;`` 开始，直到下一条行首 hash；从右侧拆分
+    title/date/lines，允许 title 本身包含换行或分号。
+    """
+    if value in (None, ""):
+        return [], 0
+    text = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    starts = list(MAP_COMMIT_START_RE.finditer(text))
+    if not starts:
+        return [], 1
+    records: List[Dict[str, str]] = []
+    invalid = 0
+    for idx, match in enumerate(starts):
+        end = starts[idx + 1].start() if idx + 1 < len(starts) else len(text)
+        segment = text[match.start():end].strip()
+        source_hash = match.group(1).lower()
+        _, separator, rest = segment.partition(";")
+        fields = rest.rsplit(";", 2) if separator else []
+        title = _normalize_mapping_title(fields[0] if len(fields) == 3 else "")
+        if not MAP_HASH_RE.fullmatch(source_hash) or not title:
+            invalid += 1
+            continue
+        records.append({"source_hash": source_hash, "title": title})
+    return records, invalid
+
+
+def _mapping_patch_type(value: Any) -> str:
+    """将 Feature_1/Bug_2/Clean up_3 转为目标补丁类型。"""
+    raw = _mapping_text(value)
+    match = re.match(r"^(.*)_\d+$", raw)
+    patch_type = match.group(1).strip() if match else raw
+    if patch_type.casefold() == "clean up":
+        return "Cleanup"
+    return patch_type
+
+
+def _normalize_kernel_pr_url(value: Any) -> str:
+    """将可识别的 openEuler kernel PR 链接统一为 GitCode URL。"""
+    text = _mapping_text(value)
+    match = MAP_PR_RE.match(text)
+    if not match:
+        return ""
+    return "https://gitcode.com/openeuler/kernel/pull/{0}".format(match.group(1))
+
+
+def _load_mapping_workbook(input_file: Path) -> Any:
+    """加载映射输入；支持实际为 OOXML 的错扩展名 .xls。"""
+    openpyxl = _require_openpyxl()
+    if input_file.suffix.lower() == ".xls":
+        data = input_file.read_bytes()
+        if not data.startswith(b"PK\x03\x04"):
+            raise RuntimeError(
+                "仅支持实际为 OOXML 的 .xls 文件；检测到旧式 BIFF .xls，"
+                "请先另存为 .xlsx"
+            )
+        return openpyxl.load_workbook(
+            io.BytesIO(data), read_only=True, data_only=False,
+        )
+    return openpyxl.load_workbook(
+        str(input_file), read_only=True, data_only=False,
+    )
 
 
 def _require_openpyxl() -> Any:
@@ -476,6 +593,312 @@ def export_commits(input_file: Path, output_file: Path) -> Dict[str, int]:
     return stats
 
 
+def _mapping_header_indexes(worksheet: Any) -> Dict[str, int]:
+    """读取映射源工作表首行表头，保留每个表头首次出现的位置。"""
+    indexes: Dict[str, int] = {}
+    for col_idx, cell in enumerate(worksheet[1], 1):
+        text = _mapping_text(cell.value)
+        if text and text not in indexes:
+            indexes[text] = col_idx - 1
+    return indexes
+
+
+def _collect_mapping_records(
+    input_file: Path,
+) -> Tuple[List[Dict[str, Any]], Dict[str, int], List[Dict[str, Any]]]:
+    """扫描输入工作簿并收集内核 commit 映射记录。"""
+    workbook = _load_mapping_workbook(input_file)
+    records: List[Dict[str, Any]] = []
+    issues: List[Dict[str, Any]] = []
+    stats = {
+        "worksheets_scanned": 0,
+        "sheets_skipped": 0,
+        "source_rows_scanned": 0,
+        "source_rows_selected": 0,
+        "commit_records": 0,
+        "invalid_records": 0,
+    }
+    compatible_sheets = 0
+    try:
+        for worksheet in workbook.worksheets:
+            stats["worksheets_scanned"] += 1
+            indexes = _mapping_header_indexes(worksheet)
+            missing = [name for name in MAP_REQUIRED_HEADERS if name not in indexes]
+            if missing:
+                stats["sheets_skipped"] += 1
+                LOG.warning(
+                    "跳过映射工作表: sheet=%s, 缺少表头=%s",
+                    worksheet.title, ",".join(missing),
+                )
+                continue
+
+            compatible_sheets += 1
+            for row_number, values in enumerate(
+                worksheet.iter_rows(min_row=2, values_only=True), 2
+            ):
+                stats["source_rows_scanned"] += 1
+                row = {
+                    name: values[index] if index < len(values) else None
+                    for name, index in indexes.items()
+                }
+                community = _mapping_text(row.get("社区类型"))
+                if community not in MAP_KERNEL_COMMUNITIES:
+                    continue
+
+                stats["source_rows_selected"] += 1
+                parsed, invalid = _parse_mapping_commit_records(
+                    row.get(COMMIT_INFO_HEADER),
+                )
+                if invalid:
+                    stats["invalid_records"] += invalid
+                    issues.append({
+                        "kind": "invalid_commit_record",
+                        "sheet": worksheet.title,
+                        "source_row": row_number,
+                        "count": invalid,
+                    })
+                for commit_position, commit in enumerate(parsed, 1):
+                    records.append({
+                        "sheet": worksheet.title,
+                        "source_row": row_number,
+                        "commit_position": commit_position,
+                        "community": community,
+                        "source_hash": commit["source_hash"],
+                        "title": commit["title"],
+                        "sr_description": _mapping_source_text(row.get("SR描述")),
+                        "ar_id": _mapping_text(row.get("AR编号")),
+                        "ar_sub_id": _mapping_text(row.get("AR子编号")),
+                        "ar_description": _mapping_source_text(row.get("标题描述")),
+                        "version_module": _mapping_source_text(row.get("版本模块")),
+                        "community_link": _mapping_text(row.get("社区链接")),
+                        "customer_impact": _mapping_source_text(row.get("客户影响")),
+                    })
+    finally:
+        workbook.close()
+
+    if compatible_sheets == 0:
+        raise RuntimeError(
+            "没有找到包含映射所需表头的工作表: {0}".format(
+                ",".join(MAP_REQUIRED_HEADERS)
+            )
+        )
+    stats["commit_records"] = len(records)
+    return records, stats, issues
+
+
+def _validate_mapping_paths(
+    input_file: Path,
+    output_file: Path,
+    force: bool,
+) -> Optional[str]:
+    """校验 map-patches 的输入、输出和覆盖策略。"""
+    if not input_file.exists():
+        return "输入文件不存在: {0}".format(input_file)
+    if not input_file.is_file():
+        return "输入路径不是普通文件: {0}".format(input_file)
+    if input_file.suffix.lower() not in (".xlsx", ".xlsm", ".xls"):
+        return "不支持的输入格式，仅支持 .xlsx/.xlsm/.xls(OOXML): {0}".format(
+            input_file
+        )
+    try:
+        if input_file.resolve() == output_file.resolve():
+            return "输入和输出不能是同一个文件"
+    except OSError:
+        return "无法解析输入或输出路径"
+    if output_file.suffix.lower() != ".xlsx":
+        return "映射输出必须使用 .xlsx 格式: {0}".format(output_file)
+    if output_file.parent and not output_file.parent.exists():
+        return "输出目录不存在: {0}".format(output_file.parent)
+    if output_file.exists() and not force:
+        return "输出文件已存在，请使用 --force 覆盖: {0}".format(output_file)
+    return None
+
+
+def _save_mapping_workbook(
+    output_file: Path,
+    rows: List[List[Any]],
+    force: bool,
+) -> None:
+    """以临时文件原子写出映射工作簿。"""
+    openpyxl = _require_openpyxl()
+    if output_file.exists() and not force:
+        raise RuntimeError("输出文件已存在，请使用 --force 覆盖: {0}".format(output_file))
+
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    worksheet.title = MAP_PATCHES_SHEET
+    worksheet.append(MAP_PATCHES_HEADERS)
+    for row in rows:
+        worksheet.append(row)
+        for cell in worksheet[worksheet.max_row]:
+            if isinstance(cell.value, str):
+                # openpyxl 会默认把以 = 开头的字符串当作公式。映射
+                # 产物只包含文本数据，显式标记为字符串以保留原值。
+                cell.data_type = "s"
+
+    temp_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", suffix=".xlsx", prefix=".map-patches-",
+            dir=str(output_file.parent), delete=False,
+        ) as temp_file:
+            temp_name = temp_file.name
+        workbook.save(temp_name)
+        os.replace(temp_name, str(output_file))
+    finally:
+        workbook.close()
+        if temp_name and os.path.exists(temp_name):
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                LOG.warning("无法清理临时文件: %s", temp_name)
+
+
+def map_patches_workbook(
+    input_file: Path,
+    output_file: Path,
+    oe_repo: str,
+    upstream_repo: str,
+    oe_ref: str = "OLK-6.6",
+    upstream_ref: str = "master",
+    product_version: str = "950",
+    force: bool = False,
+) -> Dict[str, Any]:
+    """将 950 内核使能清单转换为 patches 21 列格式。"""
+    path_error = _validate_mapping_paths(input_file, output_file, force)
+    if path_error:
+        raise RuntimeError(path_error)
+    if not _mapping_text(oe_repo) or not _mapping_text(upstream_repo):
+        raise RuntimeError("必须同时提供 openEuler 和 upstream git 仓库路径")
+
+    records, stats, issues = _collect_mapping_records(input_file)
+    from patch_tool import resolve_commit_entries
+
+    oe_queries: List[Dict[str, Optional[str]]] = []
+    upstream_queries: List[Dict[str, Optional[str]]] = []
+    for record in records:
+        if record["community"] == "合入openEuler olk内核社区版本":
+            oe_queries.append({"hash": record["source_hash"], "title": ""})
+            upstream_queries.append({"hash": "", "title": record["title"]})
+        else:
+            oe_queries.append({"hash": "", "title": record["title"]})
+            upstream_queries.append({"hash": record["source_hash"], "title": ""})
+
+    oe_result = resolve_commit_entries(
+        oe_queries, repo=oe_repo, branch=oe_ref, long_hash=True, hash_first=True,
+    )
+    upstream_result = resolve_commit_entries(
+        upstream_queries, repo=upstream_repo, branch=upstream_ref,
+        long_hash=True, hash_first=True,
+    )
+    repo_errors = list(oe_result.get("repo_errors", [])) + list(
+        upstream_result.get("repo_errors", [])
+    )
+    if repo_errors:
+        raise RuntimeError("无法读取提交仓库: {0}".format(repo_errors))
+
+    output_rows: List[List[Any]] = []
+    ambiguous_oe = 0
+    ambiguous_upstream = 0
+    for index, record in enumerate(records):
+        oe_match = oe_result["results"][index]
+        upstream_match = upstream_result["results"][index]
+        if oe_match["alternate_matches"]:
+            ambiguous_oe += 1
+            issues.append({
+                "kind": "ambiguous_oe_title",
+                "sheet": record["sheet"],
+                "source_row": record["source_row"],
+                "commit_position": record["commit_position"],
+                "source_hash": record["source_hash"],
+                "title": record["title"],
+                "alternates": oe_match["alternate_matches"],
+            })
+        if upstream_match["alternate_matches"]:
+            ambiguous_upstream += 1
+            issues.append({
+                "kind": "ambiguous_upstream_title",
+                "sheet": record["sheet"],
+                "source_row": record["source_row"],
+                "commit_position": record["commit_position"],
+                "source_hash": record["source_hash"],
+                "title": record["title"],
+                "alternates": upstream_match["alternate_matches"],
+            })
+
+        if oe_match["status"] != "Y":
+            issues.append({
+                "kind": "oe_unmatched",
+                "sheet": record["sheet"],
+                "source_row": record["source_row"],
+                "commit_position": record["commit_position"],
+                "source_hash": record["source_hash"],
+                "title": record["title"],
+            })
+        if upstream_match["status"] != "Y":
+            issues.append({
+                "kind": "upstream_unmatched",
+                "sheet": record["sheet"],
+                "source_row": record["source_row"],
+                "commit_position": record["commit_position"],
+                "source_hash": record["source_hash"],
+                "title": record["title"],
+            })
+
+        oe_id = _mapping_text(oe_match.get("commit_id"))[:12]
+        upstream_id = _mapping_text(upstream_match.get("commit_id"))[:12]
+        source_id = record["source_hash"][:12]
+        commit_key = oe_id or upstream_id or source_id
+        canonical_title = (
+            _mapping_text(oe_match.get("title"))
+            if oe_match["status"] == "Y"
+            else record["title"]
+        )
+        patch_type = _mapping_patch_type(record["ar_sub_id"])
+        unique_id = "{0}-{1}-{2}".format(
+            record["ar_id"], record["ar_sub_id"], commit_key,
+        )
+        output_rows.append([
+            record["sr_description"],
+            record["ar_description"],
+            "",
+            patch_type,
+            product_version,
+            "内核态",
+            record["version_module"],
+            canonical_title,
+            oe_id,
+            "",
+            _mapping_text(oe_match.get("git_describe")),
+            _normalize_kernel_pr_url(record["community_link"]),
+            upstream_id,
+            _mapping_text(upstream_match.get("git_describe")),
+            unique_id,
+            "否",
+            record["customer_impact"],
+            "未合入",
+            "",
+            "",
+            "",
+        ])
+
+    stats.update({
+        "rows_written": len(output_rows),
+        "oe_matched": oe_result.get("matched", 0),
+        "oe_unmatched": oe_result.get("unmatched", 0),
+        "upstream_matched": upstream_result.get("matched", 0),
+        "upstream_unmatched": upstream_result.get("unmatched", 0),
+        "ambiguous_oe": ambiguous_oe,
+        "ambiguous_upstream": ambiguous_upstream,
+    })
+    _save_mapping_workbook(output_file, output_rows, force=force)
+    return {
+        "output_file": str(output_file),
+        "stats": stats,
+        "issues": issues,
+    }
+
+
 def _validate_input_excel_path(input_file: Path) -> Optional[str]:
     """校验输入 Excel 路径。"""
     if not input_file.exists():
@@ -559,6 +982,48 @@ def build_export_commits_parser(prog: Optional[str] = None) -> argparse.Argument
     return parser
 
 
+def build_map_patches_parser(prog: Optional[str] = None) -> argparse.ArgumentParser:
+    """构造 map-patches 子命令参数解析器。"""
+    parser = argparse.ArgumentParser(
+        prog=prog,
+        description="将 950 芯片内核使能清单映射为 patches 21 列格式",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "input", metavar="INPUT",
+        help="输入 .xlsx/.xlsm 或实际为 OOXML 的 .xls 工作簿",
+    )
+    parser.add_argument("output", metavar="OUTPUT", help="输出 .xlsx 工作簿")
+    parser.add_argument(
+        "--oe-repo", required=True, metavar="PATH",
+        help="openEuler kernel 本地 git 仓库",
+    )
+    parser.add_argument(
+        "--upstream-repo", required=True, metavar="PATH",
+        help="torvalds/linux 本地 git 仓库",
+    )
+    parser.add_argument(
+        "--oe-ref", default="OLK-6.6", metavar="REF",
+        help="openEuler 查询引用（默认 OLK-6.6；也可使用 origin/REF）",
+    )
+    parser.add_argument(
+        "--upstream-ref", default="master", metavar="REF",
+        help="上游查询引用（默认 master；也可使用 origin/REF）",
+    )
+    parser.add_argument(
+        "--product-version", default="950", metavar="VERSION",
+        help="产品版本字段（默认 950）",
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="允许覆盖已存在的输出文件",
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="输出 debug 日志",
+    )
+    return parser
+
+
 def _configure_logging(verbose: bool) -> None:
     """初始化日志。"""
     logging.basicConfig(
@@ -625,9 +1090,53 @@ def cmd_export_commits(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_map_patches(args: argparse.Namespace) -> int:
+    """执行 map-patches 子命令。"""
+    input_file = Path(args.input)
+    output_file = Path(args.output)
+    try:
+        result = map_patches_workbook(
+            input_file=input_file,
+            output_file=output_file,
+            oe_repo=args.oe_repo,
+            upstream_repo=args.upstream_repo,
+            oe_ref=args.oe_ref,
+            upstream_ref=args.upstream_ref,
+            product_version=args.product_version,
+            force=args.force,
+        )
+    except (RuntimeError, OSError, ValueError) as exc:
+        print("错误: 无法映射 Excel 补丁: {0}".format(exc), file=sys.stderr)
+        return 1
+
+    stats = result["stats"]
+    print(
+        "映射完成: worksheets={worksheets_scanned}, skipped_sheets={sheets_skipped}, "
+        "source_rows={source_rows_scanned}, selected_rows={source_rows_selected}, "
+        "commits={commit_records}, rows_written={rows_written}, "
+        "oe_matched={oe_matched}, oe_unmatched={oe_unmatched}, "
+        "upstream_matched={upstream_matched}, "
+        "upstream_unmatched={upstream_unmatched}, "
+        "ambiguous_oe={ambiguous_oe}, "
+        "ambiguous_upstream={ambiguous_upstream}, "
+        "issues={issues}".format(
+            issues=len(result.get("issues", [])), **stats
+        )
+    )
+    print("输出文件: {0}".format(output_file))
+    return 0
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """程序入口。"""
     raw_args = list(sys.argv[1:] if argv is None else argv)
+    if raw_args and raw_args[0] == "map-patches":
+        parser = build_map_patches_parser(
+            prog="{0} map-patches".format(Path(sys.argv[0]).name)
+        )
+        args = parser.parse_args(raw_args[1:])
+        _configure_logging(args.verbose)
+        return cmd_map_patches(args)
     if raw_args and raw_args[0] == "export-commits":
         parser = build_export_commits_parser(
             prog="{0} export-commits".format(Path(sys.argv[0]).name)

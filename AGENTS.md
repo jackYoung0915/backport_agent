@@ -7,8 +7,8 @@ This repository contains small Python CLI tools for backport and patch workflows
 - `patch_tool.py`: git patch management with `check`, `cherry-pick`, and `sync-meta`.
 - `pr_tool.py`: PR statistics collection for gitee, gitcode.net, gitcode.com, and atomgit URLs, with optional commit-list-only export for `patch_tool.py check`.
 - `file_check_tool.py`: basename-based file presence checks across system directories.
-- `excel_tool.py`: Excel row splitting and `Commit信息` commit-list export.
-- `mcp_server.py`: MCP server exposing the patch, PR, file-check, and Excel commit export capabilities.
+- `excel_tool.py`: Excel row splitting, `Commit信息` commit-list export, and 950 kernel patch mapping.
+- `mcp_server.py`: MCP server exposing the patch, PR, file-check, Excel commit export, and patch mapping capabilities.
 
 Most core CLI tools are stdlib-only. `mcp_server.py` and `excel_tool.py` require dependencies listed in `requirements.txt`.
 
@@ -20,7 +20,7 @@ When project tool behavior or public interfaces change, always check whether `mc
 - Git CLI for `patch_tool.py` operations.
 - A git repository with history is needed to exercise patch checks, cherry-picks, or metadata sync.
 - Network access and optional `GITEE_TOKEN` / `GITCODE_TOKEN` may be needed for private or rate-limited PR stats.
-- `openpyxl` is needed for `excel_tool.py` to read and write `.xlsx` / `.xlsm` files.
+- `openpyxl` is needed for `excel_tool.py` to read and write `.xlsx` / `.xlsm` files. `map-patches` also accepts a `.xls` path only when its actual content is OOXML; genuine BIFF `.xls` files must first be converted to `.xlsx`.
 
 ### Linting
 
@@ -42,6 +42,7 @@ python3 patch_tool.py <subcommand> --help
 python3 pr_tool.py --help
 python3 file_check_tool.py --help
 python3 excel_tool.py --help
+python3 excel_tool.py map-patches --help
 ```
 
 For MCP, prefer the virtual environment when available:
@@ -60,6 +61,8 @@ python3 patch_tool.py --help
 python3 pr_tool.py --help
 python3 file_check_tool.py --help
 python3 excel_tool.py --help
+python3 excel_tool.py map-patches --help
+python3 -m unittest tests.test_excel_tool
 ```
 
 ### Tool notes
@@ -76,7 +79,10 @@ python3 excel_tool.py --help
 - Without `--roots`, `file_check_tool.py --os-family {auto,generic,debian,rpm}` controls default roots. `auto` reads `/etc/os-release`; `rpm` covers CentOS/RHEL/openEuler-style layouts; `debian` adds Debian multiarch library directories.
 - `excel_tool.py INPUT OUTPUT` processes all worksheets in `.xlsx` / `.xlsm` files. It splits rows only by the `Commit信息` column, ignores blank commit segments, and fills other columns from the original row.
 - `excel_tool.py export-commits INPUT OUTPUT` treats each `Commit信息` entry as semicolon-delimited fields, keeps only field 1 as commit hash and field 2 as commit title, and exports text lines formatted as `12-char-hash    commit title` (four spaces between hash and title). Entries without at least a 12-character hash and non-empty title are skipped.
+- `excel_tool.py map-patches INPUT OUTPUT --oe-repo OE_REPO --upstream-repo UPSTREAM_REPO` maps only `合入openEuler olk内核社区版本` and `合入上游linux内核社区版本` rows to the 21-column `patches.xlsx` schema. It expands every `Commit信息` record into one output row, preserves duplicate commits across different ARs, and does not modify either repository.
+- `map-patches` resolves authoritative commits by hash and the counterpart repository by exact title. The default refs are `OLK-6.6` and `master`, with `origin/<ref>` fallback. Multiple title matches use the newest commit in the selected ref and are reported; unmatched fields remain blank while other rows continue.
+- `map-patches` never clones, fetches, or checks out repositories. Output must be `.xlsx`, existing files require `--force`, and writes are atomic.
 
 ### No build step
 
-There is no build step, no `pyproject.toml`, and no test suite in the repo.
+There is no build step for these standalone tools. Run targeted stdlib `unittest` modules directly when changing tested behavior.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-补丁/PR/文件检查工具 MCP Server。
+补丁/PR/文件检查与 Excel 补丁映射工具 MCP Server。
 
 基于 FastMCP 暴露本仓库工具的核心能力，支持 stdio / SSE / streamable-http 传输。
 
@@ -18,7 +18,7 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from excel_tool import collect_commits, export_commits
+from excel_tool import collect_commits, export_commits, map_patches_workbook
 from file_check_tool import (
     _build_rows,
     _count_summary,
@@ -33,7 +33,7 @@ mcp = FastMCP(
     "backport-agent",
     instructions=(
         "补丁/PR/文件检查工具，提供补丁合入检查、批量 cherry-pick、作者元信息同步、"
-        "PR 统计、文件存在性检查与 Excel Commit信息 导出能力。"
+        "PR 统计、文件存在性检查、Excel Commit信息 导出与 950 内核补丁映射能力。"
     ),
 )
 
@@ -228,6 +228,54 @@ def excel_export_commits(input_file: str, output_file: Optional[str] = None) -> 
     except Exception as exc:
         result = {"error": str(exc)}
 
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def excel_map_patches(
+    input_file: str,
+    output_file: str,
+    oe_repo: str,
+    upstream_repo: str,
+    oe_ref: str = "OLK-6.6",
+    upstream_ref: str = "master",
+    product_version: str = "950",
+    overwrite: bool = False,
+) -> str:
+    """将 950 芯片内核使能清单映射为 patches 21 列工作簿。
+
+    Args:
+        input_file: 输入 Excel 路径，支持 .xlsx/.xlsm，以及实际内容为 OOXML
+                    的错扩展名 .xls；旧式 BIFF .xls 不支持。
+        output_file: 新建的 .xlsx 输出路径。
+        oe_repo: openEuler kernel 本地 git 仓库绝对路径。
+        upstream_repo: torvalds/linux 本地 git 仓库绝对路径。
+        oe_ref: openEuler 查询引用，默认 OLK-6.6；不存在时会尝试 origin/OLK-6.6。
+        upstream_ref: 上游查询引用，默认 master；不存在时会尝试 origin/master。
+        product_version: 目标产品版本字段，默认 950。
+        overwrite: 是否允许覆盖已存在输出，默认 false。
+
+    Returns:
+        JSON 对象，包含 output_file、stats 与 issues。仅处理“合入openEuler
+        olk内核社区版本”和“合入上游linux内核社区版本”，每个 Commit信息
+        记录输出一行；未匹配的一端留空并记录 issue，不中止其余记录。
+
+    注意:
+        本工具不会 clone、fetch、checkout 或修改传入的 git 仓库。
+    """
+    try:
+        result = map_patches_workbook(
+            input_file=Path(input_file),
+            output_file=Path(output_file),
+            oe_repo=oe_repo,
+            upstream_repo=upstream_repo,
+            oe_ref=oe_ref,
+            upstream_ref=upstream_ref,
+            product_version=product_version,
+            force=overwrite,
+        )
+    except Exception as exc:
+        result = {"error": str(exc)}
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 

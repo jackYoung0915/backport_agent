@@ -515,9 +515,30 @@ def _load_repo_check_index(
     repo_name = repo_spec["name"] or ""
     repo_path = repo_spec["path"] or "."
     branch = repo_spec.get("branch")
-    log_args = ["log", "--no-merges"]
+    resolved_branch = branch
     if branch:
-        log_args.append(branch)
+        code, _, _ = run_git(
+            ["rev-parse", "--verify", "{0}^{{commit}}".format(branch)],
+            cwd=repo_path,
+        )
+        if code != 0 and not branch.startswith("origin/"):
+            fallback = "origin/{0}".format(branch)
+            code, _, _ = run_git(
+                ["rev-parse", "--verify", "{0}^{{commit}}".format(fallback)],
+                cwd=repo_path,
+            )
+            if code == 0:
+                resolved_branch = fallback
+        if code != 0:
+            return None, {
+                "repo": repo_name,
+                "path": repo_path,
+                "branch": branch,
+                "error": "无法解析 git 引用: {0}".format(branch),
+            }
+    log_args = ["log", "--no-merges"]
+    if resolved_branch:
+        log_args.append(resolved_branch)
     log_args.append("--format=%H%x01%h%x01%s")
 
     code, log_out, err = run_git(log_args, cwd=repo_path)
@@ -525,7 +546,7 @@ def _load_repo_check_index(
         return None, {
             "repo": repo_name,
             "path": repo_path,
-            "branch": branch or "",
+            "branch": resolved_branch or "",
             "error": err or "无法获取 git log，请确保在 git 仓库中且分支/引用有效",
         }
 
@@ -549,7 +570,7 @@ def _load_repo_check_index(
     return {
         "name": repo_name,
         "path": repo_path,
-        "branch": branch,
+        "branch": resolved_branch,
         "title_index": title_index,
         "hash_entries": hash_entries,
         "full_hashes": full_hashes,
@@ -572,13 +593,20 @@ def _entry_matches_repo(
     entry: Dict[str, Optional[str]],
     index: Dict[str, Any],
     long_hash: bool,
+    hash_first: bool = False,
 ) -> List[Dict[str, Any]]:
     """返回某条输入在单个仓库中的所有候选命中。"""
     title = entry.get("title") or ""
     src_hash = entry.get("hash")
     method = ""
     matches: List[Tuple[str, str, str]] = []
-    if title and title in index["title_index"]:
+    if hash_first and src_hash:
+        method = "hash"
+        matches = _find_hash_matches(index, src_hash)
+        if not matches and title and title in index["title_index"]:
+            method = "title"
+            matches = list(index["title_index"][title])
+    elif title and title in index["title_index"]:
         method = "title"
         matches = list(index["title_index"][title])
     elif src_hash:
@@ -596,6 +624,95 @@ def _entry_matches_repo(
             "matched_title": matched_title,
             "match_method": method,
         })
+    return result
+
+
+def resolve_commit_entries(
+    entries: List[Dict[str, Optional[str]]],
+    repo: str,
+    branch: Optional[str] = None,
+    long_hash: bool = True,
+    hash_first: bool = False,
+) -> Dict[str, Any]:
+    """批量解析结构化 commit 输入并返回提交元信息。
+
+    与 :func:`check_commits` 共享同一份 git 日志索引，但允许调用方明确
+    指定 hash 优先策略。每个 entry 至少应包含 ``hash`` 或 ``title``，
+    返回结果顺序与输入一致，适合 Excel 映射等需要保持行序的调用方。
+    """
+    repo_spec = {"name": "default", "path": repo, "branch": branch}
+    index, error = _load_repo_check_index(repo_spec)
+    if error or index is None:
+        result: Dict[str, Any] = {
+            "total": len(entries),
+            "matched": 0,
+            "unmatched": len(entries),
+            "results": [],
+            "repo_errors": [error] if error else [],
+        }
+        return result
+
+    selected: List[Optional[Dict[str, Any]]] = []
+    alternates: List[List[Dict[str, Any]]] = []
+    full_hashes: List[str] = []
+    for entry in entries:
+        candidates = _entry_matches_repo(
+            entry, index, long_hash=long_hash, hash_first=hash_first,
+        )
+        match = candidates[0] if candidates else None
+        selected.append(match)
+        alternates.append(candidates[1:] if len(candidates) > 1 else [])
+        if match:
+            full_hashes.append(match["full_hash"])
+
+    info = get_batch_commit_info(
+        list(dict.fromkeys(full_hashes)), cwd=index["path"],
+    )
+    results: List[Dict[str, Any]] = []
+    matched = 0
+    for entry, match, alternate in zip(entries, selected, alternates):
+        requested_title = entry.get("title") or ""
+        requested_hash = entry.get("hash") or ""
+        if match:
+            matched += 1
+            metadata = info.get(match["full_hash"], {})
+            results.append({
+                "title": match["matched_title"] or requested_title,
+                "requested_title": requested_title,
+                "requested_hash": requested_hash,
+                "commit_id": match["commit_id"],
+                "full_hash": match["full_hash"],
+                "status": "Y",
+                "git_describe": metadata.get("describe", ""),
+                "commit_time": metadata.get("commit_time", ""),
+                "lines_changed": metadata.get("lines_changed"),
+                "match_method": match["match_method"],
+                "alternate_matches": alternate,
+                "branch": index["branch"] or "",
+            })
+        else:
+            results.append({
+                "title": requested_title,
+                "requested_title": requested_title,
+                "requested_hash": requested_hash,
+                "commit_id": "",
+                "full_hash": "",
+                "status": "N",
+                "git_describe": "",
+                "commit_time": "",
+                "lines_changed": None,
+                "match_method": "",
+                "alternate_matches": [],
+                "branch": index["branch"] or "",
+            })
+
+    result = {
+        "total": len(entries),
+        "matched": matched,
+        "unmatched": len(entries) - matched,
+        "results": results,
+        "repo_errors": [],
+    }
     return result
 
 
