@@ -874,7 +874,7 @@ def map_patches_workbook(
             upstream_id,
             _mapping_text(upstream_match.get("git_describe")),
             unique_id,
-            "否",
+            "",
             record["customer_impact"],
             "未合入",
             "",

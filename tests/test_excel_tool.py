@@ -205,7 +205,7 @@ class ExcelMapPatchesTests(unittest.TestCase):
         self.assertEqual(
             first[14], "AR1-Feature_1-{0}".format(fixture["oe_semicolon"][:12])
         )
-        self.assertEqual(first[15:18], ("否", "影响", "未合入"))
+        self.assertEqual(first[15:18], (None, "影响", "未合入"))
 
         missing = values[2]
         self.assertEqual(missing[8], fixture["oe_missing"][:12])
