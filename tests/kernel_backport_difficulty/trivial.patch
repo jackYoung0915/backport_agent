@@ -1,0 +1,12 @@
+From 1111111 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] docs: fix kernel parameter typo
+
+diff --git a/Documentation/admin-guide/kernel-parameters.txt b/Documentation/admin-guide/kernel-parameters.txt
+index 1111111..2222222 100644
+--- a/Documentation/admin-guide/kernel-parameters.txt
++++ b/Documentation/admin-guide/kernel-parameters.txt
+@@ -1,3 +1,3 @@
+ Example parameter documentation.
+-This is a tpyo.
++This is a typo.
+ End of example.

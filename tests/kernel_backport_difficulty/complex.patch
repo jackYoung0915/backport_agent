@@ -1,0 +1,52 @@
+From 2222222 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] mm: change object lifetime and exported API
+
+diff --git a/include/linux/example.h b/include/linux/example.h
+index 1111111..2222222 100644
+--- a/include/linux/example.h
++++ b/include/linux/example.h
+@@ -1,9 +1,10 @@
+ struct example_object {
+ 	int id;
++	unsigned long flags;
+ };
+-int example_lookup(int id);
++int example_lookup(int id, unsigned long flags);
+ void example_release(struct example_object *obj);
+diff --git a/kernel/locking/example.c b/kernel/locking/example.c
+index 1111111..2222222 100644
+--- a/kernel/locking/example.c
++++ b/kernel/locking/example.c
+@@ -1,12 +1,16 @@
+-#include <linux/spinlock.h>
++#include <linux/mutex.h>
+ static struct example_object *global_object;
+-int example_lookup(int id)
++int example_lookup(int id, unsigned long flags)
+ {
+-	spin_lock(&global_lock);
++	mutex_lock(&global_mutex);
+ 	global_object->id = id;
+-	spin_unlock(&global_lock);
++	global_object->flags = flags;
++	mutex_unlock(&global_mutex);
+ 	return 0;
+ }
+-EXPORT_SYMBOL(example_lookup);
++EXPORT_SYMBOL_GPL(example_lookup);
+ void example_release(struct example_object *obj)
+ {
++	synchronize_rcu();
+ 	kfree(obj);
+ }
+diff --git a/mm/example.c b/mm/example.c
+index 1111111..2222222 100644
+--- a/mm/example.c
++++ b/mm/example.c
+@@ -1,5 +1,6 @@
+ void example_destroy(struct example_object *obj)
+ {
++	local_irq_disable();
+ 	example_release(obj);
++	local_irq_enable();
+ }

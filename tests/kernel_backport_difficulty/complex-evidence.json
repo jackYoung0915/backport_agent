@@ -1,0 +1,43 @@
+{
+  "conflict": {
+    "apply_attempted": 1,
+    "apply_succeeded": 0,
+    "conflicted_hunks": 3,
+    "conflicted_files": 2,
+    "conflict_lines": 35,
+    "source": "合成样例：模拟目标树三方应用",
+    "locations": ["include/linux/example.h:@@ -1,9 +1,10 @@", "kernel/locking/example.c:@@ -1,12 +1,16 @@", "mm/example.c:@@ -1,5 +1,6 @@"]
+  },
+  "kabi": {
+    "added_exported_symbols": 1,
+    "removed_exported_symbols": 1,
+    "prototype_changes": 1,
+    "layout_changes": 1,
+    "whitelist_violations": 1,
+    "source": "合成样例：模拟 ABI 比较与发行版白名单检查",
+    "locations": ["include/linux/example.h:example_object", "include/linux/example.h:example_lookup"]
+  },
+  "subsystem": {
+    "locking_changes": 1,
+    "global_api_changes": 1,
+    "lifetime_changes": 1,
+    "interrupt_context_changes": 1,
+    "source": "合成样例：人工复核并发与生命周期",
+    "locations": ["kernel/locking/example.c", "mm/example.c"]
+  },
+  "semantic": {
+    "dependency_commits": 2,
+    "api_adaptations": 1,
+    "rewritten_hunks": 3,
+    "hidden_assumptions": 1,
+    "source": "合成样例：模拟目标树语义分析"
+  },
+  "verification": {
+    "build_targets": 4,
+    "test_suites": 3,
+    "runtime_testing_required": 1,
+    "concurrency_testing_required": 1,
+    "source": "合成样例：模拟目标验证矩阵"
+  },
+  "notes": ["合成样例仅用于验证计算与报告流程，不代表真实内核补丁。"]
+}
