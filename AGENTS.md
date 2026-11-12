@@ -64,7 +64,7 @@ python3 excel_tool.py --help
 
 ### Tool notes
 
-- `patch_tool.py check` is the safest patch subcommand for automated testing; it reads commit titles, hash+title lines, or hash-only entries and writes a report. The current default output format is `title|commit_id|status|git_describe|commit_time|lines_changed`, where `lines_changed` is the sum of added and deleted lines for that commit on the checked branch.
+- `patch_tool.py check` is the safest patch subcommand for automated testing; it reads commit titles, hash+title lines, or hash-only entries and writes a report. Every same-title non-merge commit matched by an input entry is emitted as a separate row, ordered from oldest to newest by the existing describe-based merge order. The `total` / `matched` / `unmatched` counts remain per input entry, so the number of result rows can exceed `total`. With `--no-sort`, input groups retain their order and same-title candidates within each group remain in repository history order. The current default output format is `title|commit_id|status|git_describe|commit_time|lines_changed`, where `lines_changed` is the sum of added and deleted lines for that commit on the checked branch.
 - `patch_tool.py check --repos-file repos.json` enables multi-repository lookup. The JSON file must be an array of objects with `name` and `path`, plus optional `branch`; a missing per-repo branch inherits `--branch`, then falls back to that repo's current branch. Multi-repo input may prefix a line with `repo_name<TAB>` to restrict that line to one configured repo; otherwise any configured repo can satisfy the match. Invalid repo/branch entries are logged and skipped while other repos continue.
 - `patch_tool.py check --include-repo` changes the text report to `title|repo|commit_id|status|git_describe|commit_time|lines_changed`. Do not feed this 7-column output to `cherry-pick`; keep the default 6-column output for downstream compatibility.
 - `patch_tool.py cherry-pick` can block on `input()` when conflicts occur, so avoid the CLI in unattended CI. Use the MCP `cherry_pick` tool for non-interactive automation.
@@ -77,6 +77,6 @@ python3 excel_tool.py --help
 - `excel_tool.py INPUT OUTPUT` processes all worksheets in `.xlsx` / `.xlsm` files. It splits rows only by the `Commit信息` column, ignores blank commit segments, and fills other columns from the original row.
 - `excel_tool.py export-commits INPUT OUTPUT` treats each `Commit信息` entry as semicolon-delimited fields, keeps only field 1 as commit hash and field 2 as commit title, and exports text lines formatted as `12-char-hash    commit title` (four spaces between hash and title). Entries without at least a 12-character hash and non-empty title are skipped.
 
-### No build step
+### Build and tests
 
-There is no build step, no `pyproject.toml`, and no test suite in the repo.
+The core patch tools have no build step. Run the repository tests with `PYTHONPATH=src python3 -m unittest discover -s tests`.

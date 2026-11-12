@@ -5,7 +5,7 @@
 
 提供三个子命令：
   check
-      按 commit title 检查是否已合入目标分支，并按 describe 合入序输出报告。
+      检查提交是否已合入目标分支，输出全部同名命中并按 describe 合入序排序。
   cherry-pick
       从补丁列表批量执行 cherry-pick，支持 --signoff、冲突暂停与续跑。
   sync-meta
@@ -515,7 +515,7 @@ def _load_repo_check_index(
     repo_name = repo_spec["name"] or ""
     repo_path = repo_spec["path"] or "."
     branch = repo_spec.get("branch")
-    log_args = ["log", "--no-merges"]
+    log_args = ["log", "--no-merges", "--reverse"]
     if branch:
         log_args.append(branch)
     log_args.append("--format=%H%x01%h%x01%s")
@@ -573,7 +573,7 @@ def _entry_matches_repo(
     index: Dict[str, Any],
     long_hash: bool,
 ) -> List[Dict[str, Any]]:
-    """返回某条输入在单个仓库中的所有候选命中。"""
+    """返回某条输入在单个仓库中的所有同名候选命中。"""
     title = entry.get("title") or ""
     src_hash = entry.get("hash")
     method = ""
@@ -583,7 +583,13 @@ def _entry_matches_repo(
         matches = list(index["title_index"][title])
     elif src_hash:
         method = "hash"
-        matches = _find_hash_matches(index, src_hash)
+        hash_matches = _find_hash_matches(index, src_hash)
+        seen_hashes: Set[str] = set()
+        for _, _, matched_title in hash_matches:
+            for candidate in index["title_index"].get(matched_title, []):
+                if candidate[0] not in seen_hashes:
+                    seen_hashes.add(candidate[0])
+                    matches.append(candidate)
 
     result: List[Dict[str, Any]] = []
     for full_h, short_h, matched_title in matches:
@@ -622,7 +628,7 @@ def check_commits(
     repos: Optional[List[Dict[str, Any]]] = None,
     sort_results: bool = True,
 ) -> Dict[str, Any]:
-    """检查提交列表是否已合入目标分支，返回结构化结果。
+    """检查提交列表是否已合入目标分支，返回全部同名命中。
 
     Args:
         input_lines: 待检查的提交列表，每项支持 'title' / 'hash title' / 'hash' 格式。
@@ -631,10 +637,11 @@ def check_commits(
         long_hash: 结果使用 40 位完整 hash。
         repos: 多仓库配置；每项包含 name/path/branch。
         sort_results: 若为 True（默认）按 describe 合入序排序输出；
-            若为 False 则保持输入顺序，使输入与输出的提交一一对应在同一位置。
+            若为 False 则保持输入条目分组顺序，同名候选按仓库历史从远到近排列。
 
     Returns:
-        {"total", "matched", "unmatched", "results": [{...}]}
+        {"total", "matched", "unmatched", "results": [{...}]}。
+        统计按输入条目计数，results 按实际命中提交展开，因此行数可能大于 total。
     """
     try:
         repo_specs = _normalize_check_repos(repo, branch, repos)
@@ -667,8 +674,7 @@ def check_commits(
             result["repo_errors"] = repo_errors
         return result
 
-    per_entry: List[Optional[Dict[str, Any]]] = []
-    per_entry_alternates: List[List[Dict[str, Any]]] = []
+    per_entry: List[List[Dict[str, Any]]] = []
     matched_by_repo: Dict[str, List[str]] = {}
     repo_path_by_name: Dict[str, str] = {idx["name"]: idx["path"] for idx in indexes}
     n_title_match = 0
@@ -682,12 +688,11 @@ def check_commits(
                 continue
             candidates.extend(_entry_matches_repo(entry, index, long_hash))
 
-        selected = candidates[0] if candidates else None
-        per_entry.append(selected)
-        per_entry_alternates.append(candidates[1:] if len(candidates) > 1 else [])
-        if selected:
-            matched_by_repo.setdefault(selected["repo"], []).append(selected["full_hash"])
-            if selected["match_method"] == "title":
+        per_entry.append(candidates)
+        if candidates:
+            for candidate in candidates:
+                matched_by_repo.setdefault(candidate["repo"], []).append(candidate["full_hash"])
+            if candidates[0]["match_method"] == "title":
                 n_title_match += 1
             else:
                 n_hash_match += 1
@@ -702,30 +707,35 @@ def check_commits(
     raw: List[Tuple[int, Dict[str, Any]]] = []
     n_matched = 0
     for i, entry in enumerate(input_entries):
-        m = per_entry[i]
+        candidates = per_entry[i]
         src_hash = entry.get("hash") or ""
         title = entry.get("title") or ""
-        display = title if title else (m["matched_title"] if m else src_hash)
-        if m:
-            display = display or m["matched_title"]
+        display = title if title else (
+            candidates[0]["matched_title"] if candidates else src_hash
+        )
+        if candidates:
             n_matched += 1
-            ci = info_by_repo.get(m["repo"], {}).get(m["full_hash"], {})
-            ts = ci.get("timestamp", 0)
-            row = {
-                "title": display, "commit_id": m["commit_id"], "status": "Y",
-                "git_describe": ci.get("describe", ""),
-                "commit_time": ci.get("commit_time", ""),
-                "lines_changed": ci.get("lines_changed"),
-                "match_method": m["match_method"],
-            }
-            if multi_repo:
-                row.update({
-                    "repo": m["repo"],
-                    "repo_path": m["repo_path"],
-                    "branch": m["branch"],
-                    "alternate_matches": per_entry_alternates[i],
-                })
-            raw.append((ts, row))
+            for m in candidates:
+                ci = info_by_repo.get(m["repo"], {}).get(m["full_hash"], {})
+                ts = ci.get("timestamp", 0)
+                row = {
+                    "title": display or m["matched_title"],
+                    "commit_id": m["commit_id"], "status": "Y",
+                    "git_describe": ci.get("describe", ""),
+                    "commit_time": ci.get("commit_time", ""),
+                    "lines_changed": ci.get("lines_changed"),
+                    "match_method": m["match_method"],
+                }
+                if multi_repo:
+                    row.update({
+                        "repo": m["repo"],
+                        "repo_path": m["repo_path"],
+                        "branch": m["branch"],
+                        "alternate_matches": [
+                            alt for alt in candidates if alt is not m
+                        ],
+                    })
+                raw.append((ts, row))
         else:
             row = {
                 "title": display, "commit_id": "", "status": "N",
@@ -975,7 +985,8 @@ def cmd_check(args: argparse.Namespace) -> int:
       - 多仓模式可选仓库前缀: "repo_name<TAB>title"
 
     匹配策略：优先按 title 精确匹配；若 title 未命中且输入行携带 hash，
-    则以该 hash 作为前缀在目标分支日志中查找同一提交。
+    则以该 hash 作为前缀定位提交，再按实际 title 扩展。每条输入的全部同名
+    非 merge 提交都会分别输出，统计仍按输入条目计数。
     """
     inp = Path(args.input_file)
     out = Path(args.output_file)
@@ -1487,7 +1498,7 @@ def main() -> int:
     p_check.add_argument(
         "--no-sort",
         action="store_true",
-        help="不按 describe 合入序排序，保持输入顺序，使输入与输出的提交位置一一对应",
+        help="不做全局 describe 排序，保持输入分组顺序，同名候选按仓库历史从远到近排列",
     )
     p_check.set_defaults(func=cmd_check)
 

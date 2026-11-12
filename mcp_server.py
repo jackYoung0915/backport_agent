@@ -63,7 +63,8 @@ def check(
 
     Returns:
         JSON 对象，包含 total / matched / unmatched 统计及 results 列表。
-        results 按 git describe 合入序排序，每项含：
+        统计按输入条目计数；每个同名命中在 results 中各占一行，因此结果数可能大于 total。
+        results 按 git describe 合入序从远到近排序，每项含：
           title, commit_id, status(Y/N), git_describe, commit_time,
           lines_changed, match_method；多仓模式额外含 repo, repo_path,
           branch, alternate_matches。顶层可能含 repo_errors。
